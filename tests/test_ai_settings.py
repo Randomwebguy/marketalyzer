@@ -201,7 +201,11 @@ def test_clear_fal_key_keeps_the_openrouter_key():
 def test_fal_key_from_the_environment(monkeypatch):
     monkeypatch.setenv("FAL_KEY", FAL)
     current = load_settings()
-    assert (current.provider, current.api_key, current.key_source) == ("fal", FAL, "env")
+    assert (current.provider, current.api_key, current.key_source) == (
+        "fal",
+        FAL,
+        "env",
+    )
     assert isinstance(current.api_key, FalKey)
     save_settings(allow_trading=True)
     assert "fal_key" not in json.loads(settings_path().read_text())

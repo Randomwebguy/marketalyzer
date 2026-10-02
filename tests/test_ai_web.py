@@ -207,9 +207,7 @@ class TestAIEndpoints:
         assert isinstance(seen["key"], openrouter.FalKey) and seen["key"] == fal
         assert seen["model"] == "google/gemini-9.1-flash-lite"
 
-        cleared = client.post(
-            "/api/ai/settings", json={"clear_fal_key": True}
-        ).json()
+        cleared = client.post("/api/ai/settings", json={"clear_fal_key": True}).json()
         assert cleared["configured"] is False
         assert "API anahtarı" in client.post("/api/ai/test").json()["detail"]
 
