@@ -1,0 +1,53 @@
+[project]
+name = "openbb-bist"
+version = "0.1.0"
+description = "Borsa Istanbul (BIST) provider extension for the OpenBB Open Data Platform."
+license = { text = "Apache-2.0" }
+readme = "README.md"
+requires-python = ">=3.10,<4"
+dependencies = [
+    "openbb-core[pandas]>=2.0.1",
+    "tzdata; sys_platform == 'win32'",
+]
+
+[project.entry-points."openbb_provider_extension"]
+bist = "openbb_bist:bist_provider"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["openbb_bist"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["D", "E", "W", "F", "S", "UP", "I", "PLC", "PLE", "PLR", "PLW", "SIM", "T20"]
+ignore = [
+    "PLR2004", "PLR0913", "PLR0915", "PLR0917", "PLC0415",
+    "E501",
+    "D202", "D203", "D205", "D212", "D213", "D400", "D415",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "D"]
+"scripts/**" = ["T20", "D"]
+"**/__init__.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+force-wrap-aliases = true
+known-first-party = ["openbb_bist"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
