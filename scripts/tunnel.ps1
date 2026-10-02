@@ -1,4 +1,4 @@
-# Start the marketalyzer web interface and publish it through a Cloudflare quick
+﻿# Start the marketalyzer web interface and publish it through a Cloudflare quick
 # tunnel (https://<random>.trycloudflare.com) on Windows. Needs cloudflared:
 #   winget install --id Cloudflare.cloudflared
 # Run from the project folder with the virtual environment active:
@@ -6,6 +6,8 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\tunnel.ps1          # real data
 #   powershell -ExecutionPolicy Bypass -File scripts\tunnel.ps1 --demo   # demo mode
 # Extra arguments go to marketalyzer-web.
+# Saved as UTF-8 with a BOM: Windows PowerShell 5.1 reads BOM-less files as ANSI
+# and garbles the Turkish messages.
 param(
     [int]$Port = 8000,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$WebArgs
