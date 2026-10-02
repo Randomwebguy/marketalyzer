@@ -1,0 +1,22 @@
+//@version=5
+// MACD sinyal çizgisini yukarı keserken fiyat uzun vadeli EMA'nın üstündeyse
+// alır; MACD aşağı kesince ya da fiyat EMA'nın altına inince satar.
+strategy("MACD + trend filtresi", overlay=false)
+
+fastLength = input.int(12, "Hızlı EMA", minval=8, maxval=16, step=4)
+slowLength = input.int(26, "Yavaş EMA", minval=20, maxval=32, step=6)
+signalLength = input.int(9, "Sinyal", minval=6, maxval=12, step=3)
+trendLength = input.int(200, "Trend EMA", minval=50, maxval=200, step=50)
+
+[macdLine, signalLine, hist] = ta.macd(close, fastLength, slowLength, signalLength)
+trend = ta.ema(close, trendLength)
+
+plot(hist, "Histogram", color=hist >= 0 ? color.teal : color.red, style=plot.style_columns)
+plot(macdLine, "MACD", color=color.blue)
+plot(signalLine, "Sinyal", color=color.orange)
+hline(0, "Sıfır", color=color.gray)
+
+if ta.crossover(macdLine, signalLine) and close > trend
+    strategy.entry("Al", strategy.long)
+if ta.crossunder(macdLine, signalLine) or close < trend
+    strategy.close("Al")

@@ -98,19 +98,34 @@ STRATEGIES: dict[str, type[Strategy]] = {
 
 
 def get_strategy(strategy: str | type[Strategy]) -> type[Strategy]:
-    """Resolve a strategy name from ``STRATEGIES`` or pass a class through."""
+    """Resolve a strategy name or pass a class through.
+
+    Names are keys of ``STRATEGIES`` or ``script:<name>`` for a strategy script
+    from the script store.
+    """
     if isinstance(strategy, type) and issubclass(strategy, Strategy):
         return strategy
+    if isinstance(strategy, str) and strategy.startswith("script:"):
+        from marketalyzer.scripting.store import load_strategy
+
+        try:
+            return load_strategy(strategy.removeprefix("script:"))
+        except KeyError:
+            raise ValueError(f"Unknown script {strategy!r}.") from None
     try:
         return STRATEGIES[strategy]
     except KeyError:
         raise ValueError(
-            f"Unknown strategy {strategy!r}. Available: {', '.join(STRATEGIES)}."
+            f"Unknown strategy {strategy!r}. Available: {', '.join(STRATEGIES)}"
+            " or script:<name>."
         ) from None
 
 
 def strategy_params(strategy: type[Strategy]) -> dict[str, Any]:
     """Return a strategy's tunable parameters and their default values."""
+    names = getattr(strategy, "param_names", None)
+    if names is not None:
+        return {name: getattr(strategy, name) for name in names}
     return {
         name: getattr(strategy, name)
         for name in dir(strategy)

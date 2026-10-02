@@ -1,0 +1,18 @@
+//@version=5
+// RSI aşırı satım seviyesinin altına inince alır, aşırı alım seviyesini
+// geçince satar. Yükselen piyasada erken satar, düşen piyasada erken alır.
+strategy("RSI dönüşü", overlay=false)
+
+length = input.int(14, "RSI periyodu", minval=7, maxval=28, step=7)
+lower = input.int(30, "Aşırı satım", minval=20, maxval=40, step=5)
+upper = input.int(70, "Aşırı alım", minval=60, maxval=80, step=5)
+
+r = ta.rsi(close, length)
+plot(r, "RSI", color=color.purple)
+hline(upper, "Aşırı alım", color=color.red)
+hline(lower, "Aşırı satım", color=color.green)
+
+if r < lower
+    strategy.entry("Al", strategy.long)
+if r > upper
+    strategy.close("Al")

@@ -1,0 +1,19 @@
+//@version=5
+// Fiyat alt Bollinger bandının altından tekrar içeri girince alır, orta banda
+// ulaşınca satar. Girişte, giriş fiyatının stopPct altına zarar durdur koyar.
+strategy("Bollinger dönüşü", overlay=true)
+
+length = input.int(20, "Periyot", minval=10, maxval=40, step=10)
+mult = input.float(2.0, "Standart sapma", minval=1.5, maxval=3.0, step=0.5)
+stopPct = input.float(5.0, "Zarar durdur %", minval=2, maxval=10, step=2)
+
+[basis, upper, lower] = ta.bb(close, length, mult)
+plot(basis, "Orta bant", color=color.gray)
+plot(upper, "Üst bant", color=color.blue)
+plot(lower, "Alt bant", color=color.blue)
+
+if ta.crossover(close, lower)
+    strategy.entry("Al", strategy.long)
+    strategy.exit("Stop", "Al", stop=close * (1 - stopPct / 100))
+if close > basis
+    strategy.close("Al")

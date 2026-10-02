@@ -1,0 +1,15 @@
+//@version=5
+// Bollinger bantları: ortalama ve iki standart sapma uzaklıktaki bantlar.
+// Bantların daralması (sıkışma) genellikle sert bir hareketin habercisidir.
+indicator("Bollinger bantları", overlay=true)
+
+length = input.int(20, "Periyot", minval=1)
+mult = input.float(2.0, "Standart sapma", minval=0.5, step=0.5)
+
+[basis, upper, lower] = ta.bb(close, length, mult)
+plot(basis, "Orta", color=color.orange)
+plot(upper, "Üst", color=color.blue)
+plot(lower, "Alt", color=color.blue)
+
+squeeze = ta.bbw(close, length, mult) < ta.lowest(ta.bbw(close, length, mult), 120)[1]
+plotshape(squeeze, "Sıkışma", style=shape.circle, location=location.belowbar, color=color.yellow)

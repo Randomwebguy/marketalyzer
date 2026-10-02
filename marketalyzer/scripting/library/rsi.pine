@@ -1,0 +1,15 @@
+//@version=5
+// Göreceli güç endeksi. 70 üstü aşırı alım, 30 altı aşırı satım kabul edilir.
+indicator("RSI", overlay=false)
+
+length = input.int(14, "Periyot", minval=1)
+source = input.source(close, "Kaynak")
+
+r = ta.rsi(source, length)
+plot(r, "RSI", color=color.purple)
+hline(70, "Aşırı alım", color=color.red)
+hline(50, "Orta", color=color.gray)
+hline(30, "Aşırı satım", color=color.green)
+
+alertcondition(ta.crossunder(r, 30), "RSI 30 altında", "RSI aşırı satım bölgesine girdi")
+alertcondition(ta.crossover(r, 70), "RSI 70 üstünde", "RSI aşırı alım bölgesine girdi")

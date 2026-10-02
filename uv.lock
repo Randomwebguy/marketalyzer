@@ -899,6 +899,7 @@ dependencies = [
     { name = "openbb-bist" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.0.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "requests" },
     { name = "uvicorn" },
 ]
 
@@ -915,6 +916,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.110" },
     { name = "openbb-bist", editable = "providers/bist" },
     { name = "pandas", specifier = ">=2.0" },
+    { name = "requests", specifier = ">=2.31" },
     { name = "uvicorn", specifier = ">=0.29" },
 ]
 

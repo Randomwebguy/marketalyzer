@@ -1,0 +1,17 @@
+//@version=5
+// Hızlı hareketli ortalama yavaşı yukarı kesince alır, aşağı kesince satar.
+// Klasik trend takibi; yatay piyasada sık sık zararla kapanan sinyal üretir.
+strategy("SMA kesişimi", overlay=true)
+
+fastLength = input.int(10, "Hızlı SMA", minval=5, maxval=40, step=5)
+slowLength = input.int(50, "Yavaş SMA", minval=20, maxval=160, step=20)
+
+fast = ta.sma(close, fastLength)
+slow = ta.sma(close, slowLength)
+plot(fast, "Hızlı SMA", color=color.blue)
+plot(slow, "Yavaş SMA", color=color.orange)
+
+if ta.crossover(fast, slow)
+    strategy.entry("Al", strategy.long)
+if ta.crossunder(fast, slow)
+    strategy.close("Al")

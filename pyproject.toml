@@ -10,6 +10,7 @@ dependencies = [
     "pandas>=2.0",
     "fastapi>=0.110",
     "uvicorn>=0.29",
+    "requests>=2.31",
 ]
 
 [project.scripts]
@@ -49,6 +50,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "D"]
 "marketalyzer/*/cli.py" = ["T20"]
+# The parser and interpreter dispatch on node types in long if-chains.
+"marketalyzer/scripting/{parser,runtime}.py" = ["PLR0911", "PLR0912"]
 "**/__init__.py" = ["F401"]
 
 [tool.ruff.lint.isort]

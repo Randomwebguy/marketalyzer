@@ -1,0 +1,28 @@
+//@version=5
+// Son entryLength barın zirvesi kırılınca alır. Son exitLength barın dibinin
+// altına inince ya da ATR tabanlı iz süren stop tetiklenince satar.
+strategy("Donchian kırılımı", overlay=true)
+
+entryLength = input.int(20, "Giriş kanalı", minval=10, maxval=60, step=10)
+exitLength = input.int(10, "Çıkış kanalı", minval=5, maxval=30, step=5)
+atrMult = input.float(3.0, "ATR çarpanı", minval=1.5, maxval=4.5, step=1.5)
+
+upper = ta.highest(high, entryLength)[1]
+lower = ta.lowest(low, exitLength)[1]
+atr = ta.atr(14)
+
+// İz süren stop yalnızca yukarı hareket eder; pozisyon yokken sıfırlanır.
+var float trail = na
+if strategy.position_size > 0
+    trail := math.max(nz(trail, close - atrMult * atr), close - atrMult * atr)
+else
+    trail := na
+
+plot(upper, "Üst kanal", color=color.blue)
+plot(lower, "Alt kanal", color=color.orange)
+plot(trail, "İz süren stop", color=color.red, style=plot.style_linebr)
+
+if close > upper
+    strategy.entry("Al", strategy.long)
+if close < lower or close < trail
+    strategy.close("Al")

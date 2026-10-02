@@ -44,7 +44,7 @@ def _plain(value: Any) -> Any:
     if isinstance(value, pd.Timedelta):
         return value.days
     if isinstance(value, float):
-        return None if math.isnan(value) else round(value, 4)
+        return None if math.isnan(value) else round(float(value), 4)
     if hasattr(value, "item"):
         return _plain(value.item())
     return value

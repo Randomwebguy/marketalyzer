@@ -1,0 +1,15 @@
+//@version=5
+// MACD: hızlı ve yavaş EMA farkı, sinyal çizgisi ve histogram.
+indicator("MACD", overlay=false)
+
+fastLength = input.int(12, "Hızlı", minval=1)
+slowLength = input.int(26, "Yavaş", minval=1)
+signalLength = input.int(9, "Sinyal", minval=1)
+
+[macdLine, signalLine, hist] = ta.macd(close, fastLength, slowLength, signalLength)
+plot(hist, "Histogram", color=hist >= 0 ? color.teal : color.red, style=plot.style_columns)
+plot(macdLine, "MACD", color=color.blue)
+plot(signalLine, "Sinyal", color=color.orange)
+hline(0, "Sıfır", color=color.gray)
+
+alertcondition(ta.crossover(macdLine, signalLine), "MACD yukarı kesti", "MACD sinyal çizgisini yukarı kesti")
