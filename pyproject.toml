@@ -1,0 +1,60 @@
+[project]
+name = "marketalyzer"
+version = "0.1.0"
+description = "AI-assisted backtesting and paper trading on Borsa Istanbul, without real money."
+readme = "README.md"
+requires-python = ">=3.10,<4"
+dependencies = [
+    "openbb-bist",
+    "backtesting>=0.6.6",
+    "pandas>=2.0",
+]
+
+[project.scripts]
+marketalyzer-backtest = "marketalyzer.backtest.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.uv.workspace]
+members = ["providers/bist"]
+
+[tool.uv.sources]
+openbb-bist = { workspace = true }
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["marketalyzer"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+extend-exclude = ["providers"]
+
+[tool.ruff.lint]
+select = ["D", "E", "W", "F", "S", "UP", "I", "PLC", "PLE", "PLR", "PLW", "SIM", "T20"]
+ignore = [
+    "PLR2004", "PLR0913", "PLR0915", "PLR0917", "PLC0415",
+    "E501",
+    "D202", "D203", "D205", "D212", "D213", "D400", "D415",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "D"]
+"marketalyzer/backtest/cli.py" = ["T20"]
+"**/__init__.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+force-wrap-aliases = true
+known-first-party = ["marketalyzer", "openbb_bist"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
