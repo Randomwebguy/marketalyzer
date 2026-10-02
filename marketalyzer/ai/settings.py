@@ -220,14 +220,13 @@ def save_settings(
         if provider not in PROVIDERS:
             raise ValueError(f"Bilinmeyen sağlayıcı: {str(provider)[:40]}")
         stored["provider"] = provider
-    if clear_key:
-        stored.pop("api_key", None)
-    if clear_fal_key:
-        stored.pop("fal_key", None)
-    if api_key is not _UNSET and api_key is not None:
-        stored["api_key"] = _check_key(api_key, "openrouter")
-    if fal_key is not _UNSET and fal_key is not None:
-        stored["fal_key"] = _check_key(fal_key, "fal")
+    changes = {"openrouter": (api_key, clear_key), "fal": (fal_key, clear_fal_key)}
+    for name, (key, clear) in changes.items():
+        field_name = KEY_FIELDS[name][0]
+        if clear:
+            stored.pop(field_name, None)
+        if key is not _UNSET and key is not None:
+            stored[field_name] = _check_key(key, name)
     if model is not _UNSET:
         checked = _check_model(model)
         if checked is None:

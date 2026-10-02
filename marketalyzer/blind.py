@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 from marketalyzer import research
+from marketalyzer.ai import learn
 from marketalyzer.ai.decide import (
     Decider,
     position_view,
@@ -187,6 +188,7 @@ class Simulation:
         on_decision: Callable[[dict[str, Any]], None] | None = None,
         cancelled: Callable[[], bool] = lambda: False,
         script: Script | None = None,
+        strategy: dict[str, Any] | None = None,
     ):
         self.data = data
         self.config = config
@@ -195,6 +197,7 @@ class Simulation:
         self.on_decision = on_decision
         self.cancelled = cancelled
         self.script = script
+        self.strategy = strategy
         self.account = _Account(cash=allocation)
         self.allocation = allocation
         self.trades: list[dict[str, Any]] = []
@@ -321,6 +324,7 @@ class Simulation:
             script=script_view(result, close, EVENTS[event]),
             position=position,
             training=self.data.training,
+            strategy=self.strategy,
         )
         return view, result
 
@@ -650,6 +654,27 @@ def estimate(config: BlindConfig, data: list[Data]) -> dict[str, Any]:
     return {"decisions": min(events, MAX_DECISIONS * len(data)), "symbols": rows}
 
 
+def training_trades(script: Script, data: Data, config: BlindConfig) -> list[dict]:
+    """Trade the script's signals, without the AI, on the bars before the test."""
+    if data.first - data.train_first < 2:
+        return []
+    cut = data.frame.iloc[: data.first]
+    result = script.run(cut, config.inputs, symbol=data.code, interval=config.interval)
+    past = Data(data.code, cut, data.train_first, data.train_first, result, {})
+    return Simulation(past, config, config.cash, script=script).run().trades
+
+
+def strategy_context(
+    script: Script, data: list[Data], config: BlindConfig, decider: Decider
+) -> dict[str, Any]:
+    """Return the strategy's summary and its record before the test, for views."""
+    trades = [t for d in data for t in training_trades(script, d, config)]
+    return {
+        "strateji_ozeti": learn.strategy_brief(decider, script.source),
+        "strateji_gecmisi": learn.track_record(trades),
+    }
+
+
 def run_blind(
     config: BlindConfig,
     decider: Decider | None = None,
@@ -670,9 +695,13 @@ def run_blind(
         Simulation(d, config, allocation, benchmark, script=script).run() for d in data
     ]
     ai_sims = None
+    strategy = None
     if config.mode == "ai":
         plan = estimate(config, data)
         emit({"type": "plan", **plan})
+        emit({"type": "stage", "stage": "strategy", "message": "Strateji özetleniyor"})
+        strategy = strategy_context(script, data, config, decider)
+        emit({"type": "strategy", **strategy})
         emit({"type": "stage", "stage": "deciding", "message": "Model karar veriyor"})
 
         def on_decision(record: dict[str, Any]) -> None:
@@ -693,12 +722,16 @@ def run_blind(
                 on_decision=on_decision,
                 cancelled=cancelled,
                 script=script,
+                strategy=strategy,
             ).run()
 
         with ThreadPoolExecutor(max_workers=min(4, len(data))) as pool:
             ai_sims = list(pool.map(one, data))
     emit({"type": "stage", "stage": "summary", "message": "Sonuçlar hesaplanıyor"})
-    return summarize(config, data, benchmark, signal_sims, ai_sims, model)
+    result = summarize(config, data, benchmark, signal_sims, ai_sims, model)
+    if strategy:
+        result["ai"]["strategy"] = strategy
+    return result
 
 
 def config_from(body: dict[str, Any]) -> BlindConfig:
@@ -735,17 +768,36 @@ def decide_now(
     holdings: dict[str, dict[str, Any]] | None = None,
     years: float = 2.0,
     interval: str = "1d",
+    lessons: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Ask for a decision on each symbol's latest bar, for paper trading.
 
     ``holdings`` maps a symbol to ``{"qty", "avg_cost", "since"}`` from the
     paper account; a held symbol gets "SAT/TUT", the others "AL/BEKLE".
+    ``lessons`` are the latest blind test's lessons for this script; the
+    views also carry the strategy's summary and its record over the period.
     """
     codes = research._codes(symbols)
     end = today()
     start = end - timedelta(days=round(years * 365.25))
     frames, benchmark = research.load_study_frames(codes, start, end, interval)
     holdings = holdings or {}
+    past = []
+    for code in codes:
+        frame, shown = frames[code]
+        first = (
+            int(np.searchsorted(pd.DatetimeIndex(frame.index), shown))
+            if shown is not None
+            else 0
+        )
+        result = script.run(frame, inputs, symbol=code, interval=interval)
+        past.append(Data(code, frame, len(frame), first, result, {}))
+    config = BlindConfig(
+        symbols=codes, start=start, end=end, inputs=dict(inputs or {}),
+        source=script.source, interval=interval,
+    )  # fmt: skip
+    strategy = strategy_context(script, past, config, decider)
+    journal = {"dersler": list(lessons)} if lessons else None
 
     def one(code: str) -> dict[str, Any]:
         frame, shown = frames[code]
@@ -784,6 +836,8 @@ def decide_now(
             script=script_view(result, close, EVENTS[event]),
             position=position,
             training={s["key"]: s for s in stats},
+            strategy=strategy,
+            journal=journal,
         )
         decision = decider.decide(view)
         return {

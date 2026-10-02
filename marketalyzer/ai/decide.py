@@ -138,12 +138,19 @@ sonraki barın açılışında gerçekleşir.
 
 Kurallar:
 - Pozisyon yoksa karar "AL" ya da "BEKLE"; pozisyon varsa "SAT" ya da "TUT".
-- Strateji sinyali bir öneridir. Trend, momentum, hacim ve oynaklık onu
-  desteklemiyorsa reddet. Eğitim döneminde etkisiz ya da ters çalışmış sinyallere
-  güvenme, güçlü çalışmış olanlara ağırlık ver.
-- Gidiş-dönüş işlem maliyeti yaklaşık %{ROUND_TRIP_COST_PCT}; beklenen hareket bunu
-  karşılamıyorsa işlem yapma.
+- "strateji_ozeti" stratejinin mantığını, "strateji_gecmisi" test öncesinde
+  sinyallerinin sonucunu anlatır. Sinyali stratejinin kendi mantığına göre değerlendir:
+  stratejinin aradığı koşullar ret nedeni değildir. Örneğin bir dönüş (düşüşte alım)
+  stratejisinde düşüş, aşırı satım ve negatif momentum beklenen durumdur.
+- Varsayılan olarak strateji sinyalini uygula: giriş sinyalinde AL, çıkış sinyalinde
+  SAT. Yalnızca stratejinin mantığıyla açıklanamayan belirgin bir ek risk görürsen
+  reddet. Kârlı bir sinyali kaçırmak da zararlı bir işlem kadar hatadır.
+- "karar_gunlugu" varsa önceki kararlarının sonuçlarını ve ders notlarını içerir;
+  derslere uy, aynı hataları tekrarlama.
+- Eğitim döneminde güçlü çalışmış sinyallere ağırlık ver, ters çalışmışlara güvenme.
+- Gidiş-dönüş işlem maliyeti yaklaşık %{ROUND_TRIP_COST_PCT}.
 - Pozisyondayken kârı koru, zararı büyütme; ama tek bir zayıf barda panikle satma.
+- "guven": kararının doğru çıkma olasılığı (0-100).
 - Yalnızca tek satır JSON yaz, başka hiçbir şey yazma:
   {{"karar": "AL|SAT|BEKLE|TUT", "guven": 0-100, "gerekce": "en fazla 20 kelime"}}"""
 
@@ -254,6 +261,8 @@ def snapshot(
     script: dict[str, Any] | None = None,
     position: dict[str, Any] | None = None,
     training: dict[str, dict[str, Any]] | None = None,
+    strategy: dict[str, Any] | None = None,
+    journal: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Describe the last bar of ``frame`` without names, dates or price levels.
 
@@ -261,6 +270,9 @@ def snapshot(
     ``benchmark`` is the index, cut at the same bar. ``script`` holds the
     strategy's event on this bar and its plots; ``position`` the open trade;
     ``training`` each catalog signal's statistics from the training period.
+    ``strategy`` adds the strategy's summary and track record
+    (``strateji_ozeti``, ``strateji_gecmisi``); ``journal`` the resolved
+    outcomes and lessons known at this bar (``karar_gunlugu``).
     """
     ind = indicators(frame)
     c = ind["close"]
@@ -344,9 +356,13 @@ def snapshot(
             item["egitim"] = history
         active.append(item)
     view["aktif_sinyaller"] = active
+    if strategy:
+        view.update(strategy)
     if script:
         view["strateji"] = script
     view["pozisyon"] = position or {"durum": "yok"}
+    if journal:
+        view["karar_gunlugu"] = journal
     return view
 
 

@@ -15,7 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from marketalyzer import blind, research, services
-from marketalyzer.ai import author, decide, openrouter
+from marketalyzer.ai import author, decide, learn, openrouter
 from marketalyzer.ai.decide import Decider, DecisionCache, parse_decision, resolve_model
 from marketalyzer.ai.jobs import JobError, JobRunner
 from marketalyzer.ai.openrouter import OpenRouterError
@@ -68,12 +68,27 @@ def no_models(monkeypatch):
     monkeypatch.setattr("marketalyzer.web.app.list_models", fail)
 
 
-def answer(karar, guven=70, gerekce="test"):
+def answer_text(text):
     return {
-        "text": json.dumps({"karar": karar, "guven": guven, "gerekce": gerekce}),
+        "text": text,
         "model": "fake/model",
         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "cost": 0.001},
     }
+
+
+def answer(karar, guven=70, gerekce="test"):
+    return answer_text(json.dumps({"karar": karar, "guven": guven, "gerekce": gerekce}))
+
+
+def is_brief(messages):
+    """Tell the one-off strategy summary request from a decision."""
+    return messages[0]["content"] == learn.BRIEF_SYSTEM
+
+
+def brief_answer():
+    return answer_text(
+        '{"tur": "trend", "ozet": "Hızlı ortalama yavaşı kesince alır."}'
+    )
 
 
 class RuleModel:
@@ -84,6 +99,8 @@ class RuleModel:
         self.lock = threading.Lock()
 
     def __call__(self, api_key, model, messages, **kwargs):
+        if is_brief(messages):
+            return brief_answer()
         view = json.loads(messages[1]["content"])
         with self.lock:
             self.views.append(messages[1]["content"])
@@ -367,6 +384,8 @@ def test_review_every_asks_while_holding():
 
 def test_stop_loss_closes_trades():
     def always(api_key, model, messages, **kwargs):
+        if is_brief(messages):
+            return brief_answer()
         holding = json.loads(messages[1]["content"])["pozisyon"]["durum"] == "var"
         return answer("TUT" if holding else "AL")
 
