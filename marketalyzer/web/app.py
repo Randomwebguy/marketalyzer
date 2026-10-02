@@ -30,7 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from marketalyzer import blind, research, services
-from marketalyzer.ai import decide
+from marketalyzer.ai import decide, runs
 from marketalyzer.ai.author import author_script
 from marketalyzer.ai.chat import ChatError, ChatRunner, resolve_model
 from marketalyzer.ai.conversations import (
@@ -219,6 +219,7 @@ class BlindRequest(Costs):
     stop_loss_pct: float | None = Field(None, gt=0, lt=50)
     decision_model: str | None = Field(None, max_length=200)
     use_cache: bool = True
+    learning: Literal["off", "journal", "rounds"] = "off"
 
     def config(self) -> blind.BlindConfig:
         """Return the engine's config for this request."""
@@ -237,6 +238,7 @@ class BlindRequest(Costs):
             costs=self.costs(),
             slippage=self.slippage,
             stop_loss_pct=self.stop_loss_pct,
+            learning=self.learning,
         )
 
 
@@ -686,7 +688,9 @@ def create_app(
     def ai_test() -> dict[str, Any]:
         settings = load_settings()
         if not settings.api_key:
-            raise HTTPException(400, "Önce seçili sağlayıcı için bir API anahtarı kaydedin.")
+            raise HTTPException(
+                400, "Önce seçili sağlayıcı için bir API anahtarı kaydedin."
+            )
         try:
             if isinstance(settings.api_key, FalKey):
                 # fal.ai has no key endpoint: ask the cheapest fast model for one token.
@@ -932,11 +936,25 @@ def create_app(
         def work(emit, cancelled):
             if model:
                 emit({"type": "model", "model": model})
-            return blind.run_blind(
+            result = blind.run_blind(
                 config, decider, emit=emit, cancelled=cancelled, model=model
             )
+            if config.mode == "ai":
+                result["run_id"] = runs.save(result)
+            return result
 
         return job_stream("blind", work)
+
+    @app.get("/api/lab/runs")
+    def lab_runs() -> dict[str, Any]:
+        return {"runs": runs.list_runs()}
+
+    @app.get("/api/lab/runs/{run_id}")
+    def lab_run(run_id: str) -> dict[str, Any]:
+        try:
+            return runs.load(run_id)
+        except ValueError as error:
+            raise HTTPException(404, str(error)) from error
 
     @app.post("/api/lab/jobs/{job_id}/stop")
     def lab_stop(job_id: str) -> dict[str, Any]:
@@ -957,6 +975,7 @@ def create_app(
                         "avg_cost": position.avg_cost,
                         "since": buys[-1].time if buys else None,
                     }
+        learned = runs.latest_learning(request.script) if request.script else None
         try:
             script = services._script(request.script, request.source)
             rows = blind.decide_now(
@@ -966,10 +985,16 @@ def create_app(
                 inputs=dict(request.inputs),
                 holdings=holdings,
                 years=request.years,
+                lessons=learned["lessons"] if learned else None,
             )
         except (ValueError, ScriptError) as error:
             raise _fail(error) from error
-        return {"model": model_brief(decider, info), "decisions": rows}
+        return {
+            "model": model_brief(decider, info),
+            "decisions": rows,
+            "lessons": learned["lessons"] if learned else [],
+            "lessons_run": learned["run_id"] if learned else None,
+        }
 
     @app.get("/api/ai/decision-models")
     def ai_decision_models() -> dict[str, Any]:

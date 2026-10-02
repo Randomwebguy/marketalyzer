@@ -9,24 +9,32 @@ import json
 from datetime import timedelta
 
 import pandas as pd
+import pytest
+from fastapi.testclient import TestClient
 
 # Shared fakes; importing the fixtures makes them active here too.
 from test_ai_lab import (  # noqa: F401
     DATE,
     END,
+    START,
     STRATEGY,
+    TOKEN,
     RuleModel,
     answer,
     answer_text,
     config,
     no_models,
+    sse_events,
     synthetic,
 )
 
 from marketalyzer import blind
-from marketalyzer.ai import learn
+from marketalyzer.ai import decide, learn, runs
 from marketalyzer.ai.decide import Decider, DecisionCache
 from marketalyzer.ai.openrouter import OpenRouterError
+from marketalyzer.ai.settings import save_settings
+from marketalyzer.scripting import save_script
+from marketalyzer.web.app import create_app
 
 # --- Strategy context --------------------------------------------------------------
 
@@ -264,6 +272,73 @@ def test_a_failing_coach_keeps_the_test_going():
     )
     assert result["learning"]["lessons"] == []
     assert result["ai"]["decisions"] > 0
+
+
+def run_result(script, lessons=None, ai_return=1.5):
+    return {
+        "period": {"start": "2025-10-02", "end": "2026-10-01"},
+        "config": {"symbols": ["THYAO"], "script": script, "mode": "ai"},
+        "ai": {"return_pct": ai_return, "trades": 3, "strategy": {"x": 1}},
+        "signals": {"return_pct": 2.0, "trades": 5},
+        "hold": {"return_pct": 9.0},
+        "learning": {"mode": "journal", "lessons": lessons or []},
+    }
+
+
+def test_runs_are_saved_listed_and_loaded():
+    first = runs.save(run_result("kesisim", ["Eski ders."]))
+    second = runs.save(run_result("baska", ["Başka ders."], ai_return=3.0))
+    listed = runs.list_runs()
+    assert [row["id"] for row in listed] == [second, first]
+    assert listed[0]["ai_return_pct"] == 3.0 and listed[0]["scripts"] == ["baska"]
+    assert runs.load(first)["config"]["script"] == "kesisim"
+    latest = runs.latest_learning("kesisim")
+    assert latest == {"run_id": first, "lessons": ["Eski ders."]}
+    assert runs.latest_learning("yok") is None
+    for bad in ("../x", "20260101_000000_zzzzzz", ""):
+        with pytest.raises(ValueError, match="Geçersiz"):
+            runs.load(bad)
+    with pytest.raises(ValueError, match="bulunamadı"):
+        runs.load("20200101_000000_000000")
+
+
+def test_web_saves_ai_runs_and_live_decisions_use_their_lessons(monkeypatch):
+    save_settings(api_key="sk-or-v1-0123456789abcdef")
+    save_script("kesisim", STRATEGY)
+    model = RuleModel()
+    original = decide.make_decider
+
+    def make(api_key, choice, **kwargs):
+        return original(api_key, choice, **kwargs, complete=model)
+
+    monkeypatch.setattr(decide, "make_decider", make)
+    app = create_app(TOKEN)
+    with TestClient(app) as client:
+        client.headers["Authorization"] = f"Bearer {TOKEN}"
+        request = {
+            "symbols": ["THYAO"],
+            "start": START.isoformat(),
+            "end": END.isoformat(),
+            "script": "kesisim",
+            "years": 1,
+            "use_cache": False,
+            "learning": "journal",
+        }
+        events = sse_events(client.post("/api/lab/blind", json=request))
+        (result,) = [e["result"] for e in events if e["type"] == "result"]
+        assert result["learning"]["mode"] == "journal"
+        run_id = result["run_id"]
+        listed = client.get("/api/lab/runs").json()["runs"]
+        assert listed[0]["id"] == run_id
+        assert client.get(f"/api/lab/runs/{run_id}").json()["run_id"] == run_id
+        assert client.get("/api/lab/runs/..%2Fx").status_code in (400, 404)
+        runs.save(run_result("kesisim", ["Aşırı satımda sinyali uygula."]))
+        live = client.post(
+            "/api/lab/live",
+            json={"symbols": ["THYAO"], "script": "kesisim", "years": 1},
+        ).json()
+        assert live["lessons"] == ["Aşırı satımda sinyali uygula."]
+        assert "Aşırı satımda sinyali uygula." in model.views[-1]
 
 
 def test_learning_keeps_later_bars_from_changing_earlier_decisions():
