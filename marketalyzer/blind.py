@@ -50,6 +50,9 @@ MAX_DECISIONS = 800
 REVIEW_CHOICES = (0, 5, 10, 20)
 BLIND_INTERVALS = ("1d", "1W")
 MODES = ("ai", "signals")
+# off: decide alone; journal: learn from resolved outcomes; rounds: also revise
+# the script between walk-forward windows.
+LEARNING = ("off", "journal", "rounds")
 EVENTS = {"entry": "giriş", "exit": "çıkış", "review": "gözden geçirme"}
 _DATE = re.compile(r"\b(19|20)\d\d-\d\d-\d\d\b")
 
@@ -76,11 +79,14 @@ class BlindConfig:
     costs: BistCosts = field(default_factory=BistCosts)
     slippage: float = 0.001
     stop_loss_pct: float | None = None
+    learning: str = "off"
 
     def check(self) -> None:
         """Raise ValueError (in Turkish) for settings that cannot run."""
         if self.mode not in MODES:
             raise ValueError("Karar modu 'ai' ya da 'signals' olmalı.")
+        if self.learning not in LEARNING:
+            raise ValueError("Öğrenme 'off', 'journal' ya da 'rounds' olmalı.")
         if self.interval not in BLIND_INTERVALS:
             raise ValueError(f"Kör test zaman dilimi: {', '.join(BLIND_INTERVALS)}.")
         if self.review_every not in REVIEW_CHOICES:
@@ -190,6 +196,7 @@ class Simulation:
         script: Script | None = None,
         strategy: dict[str, Any] | None = None,
         codes: list[str] | None = None,
+        on_close: Callable[[Simulation, dict, dict], None] | None = None,
     ):
         self.data = data
         self.config = config
@@ -201,6 +208,8 @@ class Simulation:
         self.strategy = strategy
         # Every ticker of the test: none may appear in a view.
         self.codes = codes or [data.code]
+        # Called with (simulation, trade, entry decision) when a trade closes.
+        self.on_close = on_close
         self.account = _Account(cash=allocation)
         self.allocation = allocation
         self.trades: list[dict[str, Any]] = []
@@ -253,6 +262,8 @@ class Simulation:
             }
         )
         self.trade_bars.append((account.entry_bar, i))
+        if self.on_close:
+            self.on_close(self, self.trades[-1], account.entry_note)
         account.qty = 0
         account.stop = account.limit = math.nan
 
@@ -465,15 +476,88 @@ class Simulation:
         return self
 
 
+class Learner:
+    """Keep the journal of an AI walk: schedule and attach every outcome.
+
+    A buy's outcome is its trade, attached when the trade closes. A rejected
+    entry's outcome is the trade the signals-only run opened at the same
+    next open (what was missed or avoided), known when that trade closed;
+    without one, and for sells and holds, it is the move from the next open
+    over ``learn.HORIZON`` bars, known on that bar.
+    """
+
+    def __init__(self, journal: learn.Journal, signal_sims: list[Simulation]):
+        self.journal = journal
+        self.signals = {sim.data.code: sim for sim in signal_sims}
+        self._open: dict[int, learn.Entry] = {}
+
+    def day(self, when: Any) -> dict[str, Any] | None:
+        """Return what the decisions on ``when`` may know."""
+        return self.journal.view(when)
+
+    def add(self, sim: Simulation, i: int, view: dict, record: dict) -> None:
+        """Keep a decision just made on bar ``i`` and schedule its outcome."""
+        holding = (view.get("pozisyon") or {}).get("durum") == "var"
+        entry = self.journal.add(record, holding=holding, features=learn.features(view))
+        if record["action"] == "buy":
+            self._open[id(record)] = entry
+            return
+        outcome = None if holding else self._missed(sim, i)
+        outcome = outcome or self._forward(sim, i)
+        if outcome:
+            self.journal.resolve(entry, *outcome)
+
+    def closed(self, sim: Simulation, trade: dict, note: dict) -> None:
+        """Attach a closed trade to the buy decision that opened it."""
+        entry = self._open.pop(id(note), None)
+        if entry is not None:
+            exit_bar = sim.trade_bars[-1][1]
+            self.journal.resolve(
+                entry,
+                trade["return_pct"] or 0.0,
+                "işlem",
+                sim.data.frame.index[exit_bar],
+            )
+
+    def _missed(self, sim: Simulation, i: int) -> tuple | None:
+        signals = self.signals.get(sim.data.code)
+        if signals is None:
+            return None
+        for (entry_bar, exit_bar), trade in zip(signals.trade_bars, signals.trades):
+            if entry_bar == i + 1:
+                frame = signals.data.frame
+                return (
+                    trade["return_pct"] or 0.0,
+                    "sinyal işlemi",
+                    frame.index[exit_bar],
+                )
+        return None
+
+    @staticmethod
+    def _forward(sim: Simulation, i: int) -> tuple | None:
+        frame = sim.data.frame
+        if i + 1 >= len(frame):
+            return None
+        j = min(i + 1 + learn.HORIZON, len(frame) - 1)
+        start = float(frame["Open"].iloc[i + 1])
+        if not start:
+            return None
+        pct = (float(frame["Close"].iloc[j]) / start - 1) * 100
+        return pct, f"{j - i - 1} bar sonra", frame.index[j]
+
+
 def _walk(
-    sims: list[Simulation], *, cancelled: Callable[[], bool] = lambda: False
+    sims: list[Simulation],
+    *,
+    cancelled: Callable[[], bool] = lambda: False,
+    learner: Learner | None = None,
 ) -> None:
     """Walk the simulations together, one date at a time.
 
     On each date every symbol trading that day steps to its close; then the
-    decisions due that day are asked in parallel (each on its own cut data)
-    and their orders queued for the next open. Signals-only simulations
-    follow the signals.
+    decisions due that day are asked in parallel (each on its own cut data,
+    with what the ``learner`` knows by that day) and their orders queued for
+    the next open. Signals-only simulations follow the signals.
     """
     for sim in sims:
         sim.begin()
@@ -486,7 +570,7 @@ def _walk(
                 raise Cancelled
             due = _step_day(sims, when)
             if due:
-                _ask_day(pool, due)
+                _ask_day(pool, due, learner, when)
     finally:
         if pool:
             pool.shutdown()
@@ -514,18 +598,27 @@ def _step_day(sims: list[Simulation], when: Any) -> list[tuple[Simulation, int, 
     return due
 
 
-def _ask_day(pool: ThreadPoolExecutor, due: list[tuple[Simulation, int, str]]) -> None:
+def _ask_day(
+    pool: ThreadPoolExecutor,
+    due: list[tuple[Simulation, int, str]],
+    learner: Learner | None,
+    when: Any,
+) -> None:
     """Ask the day's decisions in parallel; record them and queue the orders."""
+    journal = learner.day(when) if learner else None
 
     def ask(item: tuple[Simulation, int, str]) -> tuple[Any, Any]:
         sim, i, event = item
-        view = sim.prepare(i, event)
+        view = sim.prepare(i, event, journal)
         return view, (sim.decide(view) if view is not None else None)
 
     for (sim, i, event), (view, decision) in zip(due, pool.map(ask, due)):
-        if view is not None:
-            action = sim.record(i, event, view, decision)
-            sim.queue(action, sim.decisions[-1])
+        if view is None:
+            continue
+        action = sim.record(i, event, view, decision)
+        sim.queue(action, sim.decisions[-1])
+        if learner:
+            learner.add(sim, i, view, sim.decisions[-1])
 
 
 # --- Results ----------------------------------------------------------------------
@@ -797,6 +890,7 @@ def run_blind(
     ]
     ai_sims = None
     strategy = None
+    learner = None
     if config.mode == "ai":
         plan = estimate(config, data)
         emit({"type": "plan", **plan})
@@ -814,6 +908,9 @@ def run_blind(
             )
 
         codes = [d.code for d in data]
+        if config.learning != "off":
+            letters = {d.code: research.letter(k) for k, d in enumerate(data)}
+            learner = Learner(learn.Journal(letters), signal_sims)
         ai_sims = [
             Simulation(
                 d,
@@ -826,15 +923,36 @@ def run_blind(
                 script=script,
                 strategy=strategy,
                 codes=codes,
+                on_close=learner.closed if learner else None,
             )
             for d in data
         ]
-        _walk(ai_sims, cancelled=cancelled)
+        _walk(ai_sims, cancelled=cancelled, learner=learner)
     emit({"type": "stage", "stage": "summary", "message": "Sonuçlar hesaplanıyor"})
     result = summarize(config, data, benchmark, signal_sims, ai_sims, model)
     if strategy:
         result["ai"]["strategy"] = strategy
+    if learner:
+        _report_learning(result, config, learner.journal)
     return result
+
+
+def _report_learning(
+    result: dict[str, Any], config: BlindConfig, journal: learn.Journal
+) -> None:
+    """Add the journal's summary and its audit note to the result."""
+    resolved = sum(entry.at is not None for entry in journal.entries)
+    result["learning"] = {
+        "mode": config.learning,
+        "decisions": len(journal.entries),
+        "resolved": resolved,
+        "lessons": list(journal.lessons),
+        "history": list(journal.history),
+    }
+    result["audit"]["notes"].append(
+        "Karar günlüğündeki her sonuç yalnızca gerçekleştiği bardan sonraki"
+        f" kararlara gösterildi ({resolved} sonuç); hisseler harfle anıldı."
+    )
 
 
 def config_from(body: dict[str, Any]) -> BlindConfig:

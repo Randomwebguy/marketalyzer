@@ -8,11 +8,15 @@ models are replaced by small rule-based fakes.
 import json
 from datetime import timedelta
 
+import pandas as pd
+
 # Shared fakes; importing the fixtures makes them active here too.
 from test_ai_lab import (  # noqa: F401
+    DATE,
     END,
     STRATEGY,
     RuleModel,
+    answer,
     answer_text,
     config,
     no_models,
@@ -99,3 +103,114 @@ def test_signals_only_run_matches_the_ai_following_every_signal():
     result = blind.run_blind(config(), Decider("k", "m", complete=follow))
     assert result["ai"]["trades"] == result["signals"]["trades"]
     assert result["ai"]["return_pct"] == result["signals"]["return_pct"]
+
+
+# --- Decision journal --------------------------------------------------------------
+
+
+def record(label, action, confidence=60, event="giriş"):
+    return {
+        "symbol": "THYAO",
+        "event": event,
+        "label": label,
+        "action": action,
+        "confidence": confidence,
+    }
+
+
+def test_journal_hides_outcomes_until_they_resolve():
+    day = pd.Timestamp
+    journal = learn.Journal({"THYAO": "Hisse A"})
+    missed = journal.add(record("BEKLE", "hold"), holding=False, features={})
+    journal.resolve(missed, 9.9, "sinyal işlemi", day("2025-03-10"))
+    assert journal.view(day("2025-03-07")) is None
+    view = journal.view(day("2025-03-10"))
+    assert view["ozet"] == {
+        "reddedilen_giris": {"adet": 1, "kar_ettirecek_%": 100.0, "ort_%": 9.9}
+    }
+    assert view["son_sonuclar"] == [
+        "Hisse A · giriş · BEKLE %60 → sinyal işlemi %+9.9 (kaçırıldı)"
+    ]
+    assert "THYAO" not in json.dumps(view)
+    assert missed.record["outcome_pct"] == 9.9
+
+
+def test_journal_summary_and_verdicts():
+    day = pd.Timestamp("2025-03-10")
+    journal = learn.Journal({"THYAO": "Hisse A"})
+    cases = [
+        (record("AL", "buy"), False, 4.0, "işlem", "doğru"),
+        (record("AL", "buy"), False, -2.0, "işlem", "zarar"),
+        (record("BEKLE", "hold"), False, -3.0, "sinyal işlemi", "doğru kaçınıldı"),
+        (
+            record("SAT", "sell", event="çıkış"),
+            True,
+            2.0,
+            "10 bar sonra",
+            "erken satış",
+        ),
+        (
+            record("TUT", "hold", event="çıkış"),
+            True,
+            -1.0,
+            "10 bar sonra",
+            "tutmak zarar",
+        ),
+    ]
+    for rec, holding, pct, kind, _ in cases:
+        journal.resolve(journal.add(rec, holding=holding, features={}), pct, kind, day)
+    view = journal.view(day)
+    assert view["ozet"]["alinan_giris"] == {"adet": 2, "kazancli_%": 50.0, "ort_%": 1.0}
+    assert view["ozet"]["pozisyon_kararlari"] == {"adet": 2, "dogru_%": 0.0}
+    assert [line.rsplit("(", 1)[1][:-1] for line in view["son_sonuclar"]] == [
+        verdict for *_, verdict in cases
+    ]
+    assert journal.fresh(day) == 5
+    journal.mark(day)
+    assert journal.fresh(day) == 0
+
+
+def test_blind_journal_feeds_later_decisions_without_names():
+    model = RuleModel()
+    result = blind.run_blind(
+        config(learning="journal"), Decider("k", "m", complete=model)
+    )
+    assert result["learning"]["mode"] == "journal"
+    assert result["learning"]["resolved"] > 0
+    texts = [v for v in model.views if "karar_gunlugu" in v]
+    assert texts
+    for text in texts:
+        assert "THYAO" not in text and "GARAN" not in text and not DATE.search(text)
+    assert any(d.get("outcome_kind") for d in result["decisions"])
+    assert result["audit"]["blind"] is True
+
+
+def test_rejected_entries_learn_from_the_signal_trade():
+    def never(api_key, model, messages, **kwargs):
+        if messages[0]["content"] == learn.BRIEF_SYSTEM:
+            return answer_text('{"tur": "trend", "ozet": "Kesişimde alır."}')
+        return answer("BEKLE")
+
+    result = blind.run_blind(
+        config(symbols=["THYAO"], learning="journal"),
+        Decider("k", "m", complete=never),
+    )
+    returns = {t["return_pct"] for t in result["signal_trades"]}
+    outcomes = [
+        d for d in result["decisions"] if d.get("outcome_kind") == "sinyal işlemi"
+    ]
+    assert outcomes
+    assert all(d["outcome_pct"] in returns for d in outcomes)
+
+
+def test_learning_keeps_later_bars_from_changing_earlier_decisions():
+    """The blindness property with the journal: extending the test changes no view."""
+    short, long = RuleModel(), RuleModel()
+    blind.run_blind(
+        config(end=END - timedelta(days=60), learning="journal"),
+        Decider("k", "m", complete=short),
+    )
+    blind.run_blind(config(learning="journal"), Decider("k", "m", complete=long))
+    shared = len(short.views)
+    assert any("karar_gunlugu" in v for v in short.views)
+    assert sorted(long.views[:shared]) == sorted(short.views)
