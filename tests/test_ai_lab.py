@@ -558,7 +558,8 @@ def test_revised_names_are_valid_script_names():
         "ai_enkai_tuprs_20261003_0158_t2"
     )
     assert blind.revised_name("ai_x_t2", 3) == "ai_x_t3"
-    assert blind.revised_name("editör", 2) == "edit_r_t2"
+    assert blind.revised_name("editör", 2) == "editor_t2"
+    assert blind.revised_name("Özel Ad", 2) == "zel_ad_t2"
     assert len(blind.revised_name("a" * 48, 4)) <= 48
 
 

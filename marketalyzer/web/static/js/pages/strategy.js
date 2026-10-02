@@ -12,10 +12,17 @@ export const TARGETS = ["ENKAI", "TUPRS", "THYAO", "BIMAS", "ASELS"];
 const MAX = 8;
 const YEARS = [1, 2, 3, 5];
 const REVIEWS = [[0, "Yalnızca yeni sinyallerde"], [5, "Her 5 barda bir"], [10, "Her 10 barda bir"], [20, "Her 20 barda bir"]];
+const LEARNING = [
+  ["off", "Kapalı"],
+  ["journal", "Karar günlüğü: sonuçlarından öğrenir"],
+  ["rounds", "Günlük + script turları"],
+];
+const ROUNDS = [2, 3, 4];
 const STAGES = {
   study: "Sinyaller inceleniyor", writing: "Model scripti yazıyor", fixing: "Model scripti düzeltiyor",
   checking: "Script doğrulanıyor", saved: "Kaydedildi", loading: "Veriler yükleniyor",
-  deciding: "Model bar bar karar veriyor", summary: "Sonuçlar hesaplanıyor",
+  strategy: "Strateji özetleniyor", deciding: "Model bar bar karar veriyor", revising: "Script geliştiriliyor",
+  summary: "Sonuçlar hesaplanıyor",
 };
 // Results survive leaving the page; the module stays loaded.
 const memory = { study: null, author: null, blind: null, live: null, presets: null, scripts: null };
@@ -379,6 +386,8 @@ export function render(root) {
     stop: store.get("strategy.stop", ""),
     cash: store.get("strategy.cash", 100000),
     cache: store.get("strategy.cache", true),
+    learning: store.get("strategy.learning", "off"),
+    rounds: store.get("strategy.rounds", 4),
   };
   let blindAbort = null;
   let blindJob = null;
@@ -428,6 +437,8 @@ export function render(root) {
       cash: Number(blindForm.cash) || 100000,
       decision_model: blindForm.model || null,
       use_cache: blindForm.cache,
+      learning: blindForm.mode === "ai" ? blindForm.learning : "off",
+      rounds: Number(blindForm.rounds) || 4,
     };
   }
 
@@ -452,6 +463,12 @@ export function render(root) {
             <span class="hint">Hızlı modeller; <a href="#/ayarlar" style="text-decoration:underline">Ayarlar</a>'dan hız testi yapıp varsayılanı değiştirebilirsiniz.</span></label>
           <label class="field">Gözden geçirme<select name="review">${REVIEWS.map(([v, l]) => `<option value="${v}" ${Number(blindForm.review) === v ? "selected" : ""}>${l}</option>`).join("")}</select>
             <span class="hint">Pozisyondayken ya da giriş koşulu sürerken model bu aralıkla yeniden sorulur.</span></label>
+        </div>
+        <div class="row">
+          <label class="field">Öğrenme<select name="learning">${LEARNING.map(([v, l]) => `<option value="${v}" ${blindForm.learning === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+            <span class="hint">Model yalnızca sonucu belli olmuş kararlarından öğrenir; her 6 sonuçta asistan modeli ders notu yazar.</span></label>
+          ${blindForm.learning === "rounds" ? `<label class="field">Tur sayısı<select name="rounds">${ROUNDS.map((n) => `<option value="${n}" ${Number(blindForm.rounds) === n ? "selected" : ""}>${n} pencere</option>`).join("")}</select>
+            <span class="hint">Test dönemi eşit pencerelere bölünür; script her pencere sonunda yalnızca o güne kadarki veriyle geliştirilir ve sonraki pencerede kullanılır.</span></label>` : ""}
         </div>` : ""}
         <div class="row">
           <label class="field">Zarar durdur % (isteğe bağlı)<input name="stop" type="number" min="0.5" max="49" step="0.5" value="${esc(blindForm.stop)}" placeholder="script belirler"></label>
@@ -473,7 +490,9 @@ export function render(root) {
   function estimateText(e) {
     if (e.mode !== "ai") return `${e.symbols.reduce((n, s) => n + s.entries + s.exits, 0)} sinyal olayı · yapay zeka çağrısı yok`;
     const cost = e.cost_usd == null ? "maliyet bilinmiyor" : `~$${fmtNumber(e.cost_usd, 3)}`;
-    return `En fazla ~${e.decisions} karar · ${cost} · ~${Math.max(1, Math.round(e.seconds / 60))} dk · ${e.model?.id ?? ""}`;
+    const l = e.learning;
+    const extra = l ? ` · + ~${l.reflections} ders notu${l.revisions ? `, ${l.revisions} script revizyonu` : ""} (${l.coach_model ?? "asistan modeli"})` : "";
+    return `En fazla ~${e.decisions} karar · ${cost} · ~${Math.max(1, Math.round(e.seconds / 60))} dk · ${e.model?.id ?? ""}${extra}`;
   }
 
   function liveLog() {
@@ -486,14 +505,19 @@ export function render(root) {
     const timed = stats.filter((d) => !d.cached && !d.error);
     const avg = timed.length ? Math.round(timed.reduce((n, d) => n + d.latency_ms, 0) / timed.length) : null;
     const progress = b.plan?.decisions ? Math.min(100, (stats.length / b.plan.decisions) * 100) : null;
+    const brief = b.strategy?.brief;
     return `
       <div class="live-head">
         ${blindAbort ? `<span class="spin"></span><b>${esc(b.stage ?? "Çalışıyor")}</b>` : `<b>Kararlar</b>`}
         ${b.model ? `<span class="chip tag violet">${esc(b.model.preset ?? b.model.name ?? b.model.id)}</span>` : ""}
+        ${b.round && blindAbort ? `<span class="chip tag">Tur ${b.round.round}/${b.round.rounds} · ${esc(b.round.script)}</span>` : ""}
         <span class="spacer"></span>
         <span class="muted small">${stats.length} karar · AL ${stats.filter((d) => d.action === "buy").length} · SAT ${stats.filter((d) => d.action === "sell").length}${avg != null ? ` · ort. ${avg} ms` : ""}</span>
       </div>
       ${progress != null && blindAbort ? `<div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div>` : ""}
+      ${brief?.ozet && blindAbort ? `<p class="muted small" style="margin:6px 0">Strateji (${esc(brief.tur)}): ${esc(brief.ozet)}</p>` : ""}
+      ${b.lessons?.length && blindAbort ? `<div class="notice" style="margin:8px 0">${icon("sparkle", "sm")} <b>Ders notları</b>
+        <ul style="margin:4px 0 0 18px">${b.lessons.map((lesson) => `<li>${esc(lesson)}</li>`).join("")}</ul></div>` : ""}
       <div class="table-wrap decision-log">${tableHtml([
         { key: "time", label: "Bar", format: (t) => fmtDate(t) },
         { key: "symbol", label: "Hisse" },
@@ -503,6 +527,46 @@ export function render(root) {
         { key: "reason", label: "Gerekçe", html: (d) => (d.error ? `<span class="error">${esc(d.error)}</span>` : esc(d.reason)) },
         { key: "latency_ms", label: "Süre", num: true, format: (v, d) => (d.cached ? "önbellek" : `${v} ms`) },
       ], list)}</div>`;
+  }
+
+  const outcomeCell = (d) => (d.outcome_pct == null ? "—" : `${pill(d.outcome_pct)}<div class="muted small">${esc(d.outcome_kind ?? "")}</div>`);
+
+  function revisionCell(revision) {
+    if (!revision) return "—";
+    if (!revision.ok) return `<span class="muted small">Script korundu${revision.problem ? `: ${esc(revision.problem)}` : ""}</span>`;
+    return `<button class="btn small" type="button" data-use-script="${esc(revision.name)}">${esc(revision.name)}</button>
+      ${revision.explanation ? `<details class="more"><summary>Ne değişti?</summary><div class="md">${renderMarkdown(revision.explanation)}</div></details>` : ""}`;
+  }
+
+  function learningHtml(r) {
+    const l = r.learning;
+    const brief = r.ai?.strategy?.strateji_ozeti;
+    const record = r.ai?.strategy?.strateji_gecmisi;
+    const parts = [];
+    if (brief?.ozet) {
+      parts.push(`<p class="muted small" style="margin:0 0 6px">Karar modeline anlatılan strateji (${esc(brief.tur)}): ${esc(brief.ozet)}
+        ${record?.islem ? ` · Test öncesi ${record.islem} işlem, kazançlı %${fmtNumber(record["kazancli_%"] ?? 0, 0)}, ortalama ${signedPct(record["ort_getiri_%"])}%` : ""}</p>`);
+    }
+    if (l) {
+      parts.push(`<p class="muted small" style="margin:0 0 6px">${l.resolved} kararın sonucu günlüğe girdi · ${l.history.length} ders notu güncellemesi · $${fmtNumber(l.cost_usd ?? 0, 4)}</p>
+        ${l.lessons.length ? `<ol style="margin:0 0 0 18px">${l.lessons.map((lesson) => `<li>${esc(lesson)}</li>`).join("")}</ol>` : `<p class="muted small">Ders notu yazılmadı.</p>`}`);
+    }
+    return parts.length ? `<h3 class="sub-title">Öğrenme</h3>${parts.join("")}` : "";
+  }
+
+  function roundsHtml(r) {
+    if (!r.rounds?.length) return "";
+    return `<h3 class="sub-title">Turlar</h3>
+      <div class="table-wrap">${tableHtml([
+        { key: "round", label: "Tur", num: true },
+        { key: "start", label: "Pencere", html: (w) => `${esc(fmtDate(w.start))} – ${esc(fmtDate(w.end))}` },
+        { key: "script", label: "Script", html: (w) => `<code>${esc(w.script)}</code>` },
+        { key: "ai", label: "Yapay zeka", num: true, html: (w) => (w.ai ? `${pctCell(w.ai.return_pct)}<div class="muted small">${w.ai.trades} işlem</div>` : "—") },
+        { key: "signals", label: "Sinyaller", num: true, html: (w) => `${pctCell(w.signals?.return_pct)}<div class="muted small">${w.signals?.trades ?? 0} işlem</div>` },
+        { key: "hold_return_pct", label: "Al-tut", num: true, html: (w) => pctCell(w.hold_return_pct) },
+        { key: "benchmark_return_pct", label: "XU100", num: true, html: (w) => pctCell(w.benchmark_return_pct) },
+        { key: "revision", label: "Sonraki tur için", html: (w) => revisionCell(w.revision) },
+      ], r.rounds)}</div>`;
   }
 
   async function estimate(button) {
@@ -540,8 +604,14 @@ export function render(root) {
         const b = memory.blind;
         if (event.type === "start") blindJob = event.job_id;
         else if (event.type === "model") b.model = event.model;
+        else if (event.type === "coach") b.coach = event.model;
         else if (event.type === "stage") b.stage = event.message || STAGES[event.stage];
         else if (event.type === "plan") b.plan = event;
+        else if (event.type === "strategy") b.strategy = { brief: event.strateji_ozeti, record: event.strateji_gecmisi };
+        else if (event.type === "lesson") b.lessons = event.lessons;
+        else if (event.type === "round") b.round = event;
+        else if (event.type === "round_end") (b.rounds ??= []).push(event.row);
+        else if (event.type === "revision_review") b.stage = `Script düzeltiliyor (${event.attempt}. deneme)`;
         else if (event.type === "decision") b.decisions.push(event.decision);
         else if (event.type === "result") b.result = event.result;
         else if (event.type === "error") b.error = event.message;
@@ -556,6 +626,11 @@ export function render(root) {
     } finally {
       blindAbort = null;
       blindJob = null;
+      // Revised scripts were saved: list them in the script picker.
+      if (memory.blind?.rounds?.length) {
+        memory.scripts = null;
+        loadOptions();
+      }
       drawBlind();
       drawSteps();
       $("[data-blind-result]", root)?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -581,8 +656,11 @@ export function render(root) {
         ${tile("İşlem", String(main.trades), { note: main.win_rate_pct == null ? "" : `Kazançlı %${fmtNumber(main.win_rate_pct, 0)}` })}
         ${ai ? tile("Karar", String(ai.decisions), { note: `AL ${ai.buys} · SAT ${ai.sells} · bekle ${ai.holds}` }) : ""}
         ${ai ? tile("Ort. karar süresi", ai.avg_latency_ms == null ? "önbellek" : `${fmtNumber(ai.avg_latency_ms, 0)} ms`, { note: `$${fmtNumber(ai.cost_usd ?? 0, 4)} · ${ai.errors} hata` }) : ""}
+        ${r.initial_signals ? tile("İlk script, sinyaller", pctText(r.initial_signals.return_pct), { note: `${r.initial_signals.trades} işlem · revizyonsuz` }) : ""}
       </div>
       ${main.trades < 10 ? `<p class="notice" style="margin:12px 0 0">${icon("alert", "sm")} İşlem sayısı az; sonuç istatistiksel olarak zayıf.</p>` : ""}
+      ${roundsHtml(r)}
+      ${learningHtml(r)}
       <div class="card-head" style="margin-top:16px"><h3>Özsermaye</h3><span class="spacer"></span>
         <button class="icon-btn sm" type="button" data-curve-toggle title="Tablo görünümü" aria-label="Tablo görünümü">${icon("table")}</button></div>
       <div data-curve></div>
@@ -604,6 +682,7 @@ export function render(root) {
           { key: "label", label: "Karar", html: (d) => decisionChip(d.label) },
           { key: "confidence", label: "Güven", num: true, format: (v) => (v == null ? "—" : `%${v}`) },
           { key: "reason", label: "Gerekçe", html: (d) => (d.error ? `<span class="error">${esc(d.error)}</span>` : esc(d.reason)) },
+          ...(r.learning ? [{ key: "outcome_pct", label: "Sonuç", num: true, html: outcomeCell }] : []),
           { key: "data_end", label: "Gördüğü son bar", format: (t) => fmtDate(t) },
         ], r.decisions.slice().reverse())}</div></details>` : ""}
       <details class="more" style="margin-top:8px"><summary>İşlemler (${(ai ? r.trades : r.signal_trades).length})</summary>
@@ -645,6 +724,8 @@ export function render(root) {
         tutulan hisseler için SAT/TUT, diğerleri için AL/BEKLE sorulur. Emir otomatik verilmez; isterseniz emir fişini açarsınız.</p>
       <button class="btn violet" type="button" data-live-run>${icon("zap", "sm")} Şimdi karar al</button>
       ${live ? `<div class="row-flex" style="margin-top:12px"><span class="muted small">${esc(live.model?.preset ?? live.model?.id ?? "")} · ${esc(live.model?.id ?? "")}</span></div>
+        ${live.lessons?.length ? `<div class="notice" style="margin:8px 0">${icon("sparkle", "sm")} <b>Son öğrenen kör testin ders notları kullanıldı</b>
+          <ul style="margin:4px 0 0 18px">${live.lessons.map((lesson) => `<li>${esc(lesson)}</li>`).join("")}</ul></div>` : ""}
         <div class="table-wrap" style="margin-top:8px">${tableHtml([
           { key: "symbol", label: "Hisse", html: (d) => `<b>${esc(d.symbol)}</b>${d.held ? `<div class="muted small">${d.held} lot</div>` : ""}` },
           { key: "time", label: "Bar", format: (t) => fmtDate(t) },
@@ -694,7 +775,13 @@ export function render(root) {
     if (el.name === "stop") blindForm.stop = el.value;
     if (el.name === "cash") blindForm.cash = el.value;
     if (el.name === "cache") blindForm.cache = el.checked;
+    if (el.name === "learning") blindForm.learning = el.value;
+    if (el.name === "rounds") blindForm.rounds = Number(el.value);
     for (const [key, value] of Object.entries(blindForm)) store.set(`strategy.${key}`, value);
+    if (el.name === "learning") {
+      drawBlind();
+      return;
+    }
     const text = $("[data-estimate-text]", root);
     if (text) text.textContent = "";
   });

@@ -1128,7 +1128,8 @@ def report_text(report: dict[str, Any]) -> str:
 
 def revised_name(base: str | None, round_no: int) -> str:
     """Name the script revised for window ``round_no``: ``<base>_t<round_no>``."""
-    stem = re.sub(r"_t\d+$", "", base or "editor").lower()
+    base = "editor" if base in (None, "", "editör") else base
+    stem = re.sub(r"_t\d+$", "", base).lower()
     stem = re.sub(r"[^a-z0-9_-]", "_", stem).strip("_-") or "script"
     suffix = f"_t{round_no}"
     return stem[: 48 - len(suffix)] + suffix

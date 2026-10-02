@@ -426,6 +426,71 @@ def test_failed_revision_keeps_the_script():
     assert rows[0]["revision"]["ok"] is False
 
 
+def test_web_learning_rounds(monkeypatch):
+    save_settings(api_key="sk-or-v1-0123456789abcdef")
+    model = RuleModel()
+    original = decide.make_decider
+
+    def make(api_key, choice, **kwargs):
+        return original(api_key, choice, **kwargs, complete=model)
+
+    monkeypatch.setattr(decide, "make_decider", make)
+    monkeypatch.setattr(
+        "marketalyzer.web.app.resolve_model", lambda key, chosen: "koç/m"
+    )
+    reflections = []
+
+    def coach_complete(api_key, model_id, messages, **kwargs):
+        reflections.append(model_id)
+        return answer_text('{"dersler": ["Sinyali uygula."]}')
+
+    def coach_stream(api_key, model_id, messages, **kwargs):
+        yield {"type": "text", "text": f"```pine\n{FASTER}```\n- Daha hızlı."}
+        yield {
+            "type": "usage",
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "cost": 0.01,
+        }
+
+    real = learn.Coach
+    monkeypatch.setattr(
+        learn,
+        "Coach",
+        lambda key, model_id: real(
+            key, model_id, complete=coach_complete, stream=coach_stream
+        ),
+    )
+    request = {
+        "symbols": ["THYAO", "GARAN"],
+        "start": START.isoformat(),
+        "end": END.isoformat(),
+        "source": STRATEGY,
+        "years": 1,
+        "use_cache": False,
+        "review_every": 5,
+        "learning": "rounds",
+        "rounds": 2,
+    }
+    app = create_app(TOKEN)
+    with TestClient(app) as client:
+        client.headers["Authorization"] = f"Bearer {TOKEN}"
+        estimate = client.post("/api/lab/estimate", json=request).json()
+        assert estimate["learning"]["revisions"] == 1
+        assert estimate["learning"]["coach_model"] == "koç/m"
+        assert estimate["learning"]["reflections"] >= 1
+        events = sse_events(client.post("/api/lab/blind", json=request))
+        kinds = {event["type"] for event in events}
+        assert {"strategy", "round", "round_end", "revision"} <= kinds
+        (result,) = [e["result"] for e in events if e["type"] == "result"]
+    rows = result["rounds"]
+    assert [row["round"] for row in rows] == [1, 2]
+    assert rows[0]["revision"]["ok"] is True
+    assert rows[1]["script"] == "editor_t2"
+    assert reflections and set(reflections) == {"koç/m"}
+    assert result["learning"]["mode"] == "rounds" and result["run_id"]
+
+
 def test_learning_keeps_later_bars_from_changing_earlier_decisions():
     """The blindness property with the journal: extending the test changes no view."""
     short, long = RuleModel(), RuleModel()

@@ -30,7 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from marketalyzer import blind, research, services
-from marketalyzer.ai import decide, runs
+from marketalyzer.ai import decide, learn, runs
 from marketalyzer.ai.author import author_script
 from marketalyzer.ai.chat import ChatError, ChatRunner, resolve_model
 from marketalyzer.ai.conversations import (
@@ -220,6 +220,7 @@ class BlindRequest(Costs):
     decision_model: str | None = Field(None, max_length=200)
     use_cache: bool = True
     learning: Literal["off", "journal", "rounds"] = "off"
+    rounds: int = Field(4, ge=1, le=blind.MAX_ROUNDS)
 
     def config(self) -> blind.BlindConfig:
         """Return the engine's config for this request."""
@@ -239,6 +240,7 @@ class BlindRequest(Costs):
             slippage=self.slippage,
             stop_loss_pct=self.stop_loss_pct,
             learning=self.learning,
+            rounds=self.rounds if self.learning == "rounds" else 1,
         )
 
 
@@ -916,6 +918,17 @@ def create_app(
             body["cost_usd"] = decide.estimate_cost(info, plan["decisions"])
             parallel = min(4, len(data))
             body["seconds"] = round(plan["decisions"] * 1.2 / parallel)
+            if config.learning != "off" and settings.api_key:
+                try:
+                    coach_model = resolve_model(settings.api_key, settings.model)
+                except (ChatError, OpenRouterError):
+                    coach_model = None
+                body["learning"] = {
+                    "mode": config.learning,
+                    "coach_model": coach_model,
+                    "reflections": max(1, plan["decisions"] // learn.REFLECT_EVERY),
+                    "revisions": config.rounds - 1,
+                }
         return body
 
     @app.post("/api/lab/blind")
@@ -927,17 +940,41 @@ def create_app(
             raise _fail(error) from error
         decider = None
         model = None
+        coach = None
         if config.mode == "ai":
             decider, info = await asyncio.to_thread(
                 decider_for, request.decision_model, request.use_cache
             )
             model = model_brief(decider, info)
+            if config.learning != "off":
+                # The assistant model writes the lessons and revises the script.
+                settings = load_settings()
+                try:
+                    chosen = await asyncio.to_thread(
+                        resolve_model, decider.api_key, settings.model
+                    )
+                except (ChatError, OpenRouterError) as error:
+                    raise HTTPException(400, error.message) from error
+                coach = learn.Coach(decider.api_key, chosen)
 
         def work(emit, cancelled):
             if model:
                 emit({"type": "model", "model": model})
+            if coach:
+                emit({"type": "coach", "model": coach.model})
+            revise = (
+                blind.reviser(config, coach, emit=emit, cancelled=cancelled)
+                if coach and config.rounds > 1
+                else None
+            )
             result = blind.run_blind(
-                config, decider, emit=emit, cancelled=cancelled, model=model
+                config,
+                decider,
+                emit=emit,
+                cancelled=cancelled,
+                model=model,
+                coach=coach,
+                revise=revise,
             )
             if config.mode == "ai":
                 result["run_id"] = runs.save(result)
