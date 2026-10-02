@@ -11,9 +11,10 @@ from marketalyzer.backtest import data as data_module
 
 @pytest.fixture(autouse=True)
 def cache_dir(tmp_path, monkeypatch):
-    """Keep the price cache inside the test's temporary directory."""
+    """Keep the price cache and paper accounts inside the test's temp directory."""
     path = tmp_path / "cache"
     monkeypatch.setenv("MARKETALYZER_CACHE_DIR", str(path))
+    monkeypatch.setenv("MARKETALYZER_HOME", str(tmp_path / "home"))
     return path
 
 

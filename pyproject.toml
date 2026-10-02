@@ -12,6 +12,7 @@ dependencies = [
 
 [project.scripts]
 marketalyzer-backtest = "marketalyzer.backtest.cli:main"
+marketalyzer-paper = "marketalyzer.paper.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]
@@ -44,7 +45,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "D"]
-"marketalyzer/backtest/cli.py" = ["T20"]
+"marketalyzer/*/cli.py" = ["T20"]
 "**/__init__.py" = ["F401"]
 
 [tool.ruff.lint.isort]

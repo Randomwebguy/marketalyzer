@@ -38,7 +38,8 @@ LABELS = {
 }
 
 
-def _number(text: str) -> int | float | str:
+def parse_value(text: str) -> int | float | str:
+    """Parse a command line value as an int, a float or, failing both, text."""
     for cast in (int, float):
         try:
             return cast(text)
@@ -47,7 +48,8 @@ def _number(text: str) -> int | float | str:
     return text
 
 
-def _pair(text: str) -> tuple[str, str]:
+def parse_pair(text: str) -> tuple[str, str]:
+    """Parse NAME=VALUE."""
     name, sep, value = text.partition("=")
     if not sep or not name:
         raise argparse.ArgumentTypeError(f"Expected NAME=VALUE, got {text!r}.")
@@ -57,7 +59,7 @@ def _pair(text: str) -> tuple[str, str]:
 def _grid_values(spec: str) -> list:
     """Parse "5:30:5" (inclusive range) or "10,20,30" into a list of values."""
     if ":" in spec:
-        parts = [_number(part) for part in spec.split(":")]
+        parts = [parse_value(part) for part in spec.split(":")]
         if len(parts) != 3 or not all(isinstance(p, (int, float)) for p in parts):
             raise argparse.ArgumentTypeError(f"Expected START:STOP:STEP, got {spec!r}.")
         start, stop, step = parts
@@ -69,7 +71,7 @@ def _grid_values(spec: str) -> list:
             values.append(value)
             value += step
         return values
-    return [_number(part) for part in spec.split(",") if part]
+    return [parse_value(part) for part in spec.split(",") if part]
 
 
 def _print_summary(summary: dict[str, Any]) -> None:
@@ -130,7 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-p",
         "--param",
-        type=_pair,
+        type=parse_pair,
         action="append",
         default=[],
         metavar="AD=DEĞER",
@@ -141,7 +143,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--grid",
-        type=_pair,
+        type=parse_pair,
         action="append",
         default=[],
         metavar="AD=ARALIK",
@@ -201,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
             summary = result.summary()
             report = result.out_of_sample or result.in_sample
         else:
-            params = {name: _number(value) for name, value in args.param}
+            params = {name: parse_value(value) for name, value in args.param}
             report = run_backtest(args.symbol, args.strategy, params=params, **common)
             summary = report.summary()
     except Exception as error:

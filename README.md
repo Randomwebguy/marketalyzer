@@ -9,7 +9,8 @@ Borsa İstanbul (BIST) üzerinde yapay zeka destekli strateji denemeleri için b
 ```
 providers/bist/          openbb-bist: OpenBB ODP V5 için BIST veri sağlayıcısı
 marketalyzer/backtest/   backtesting.py üzerine kurulu BIST backtest motoru
-tests/                   backtest motorunun testleri
+marketalyzer/paper/      sanal hesapla paper trading simülatörü
+tests/                   backtest ve paper trading testleri
 ```
 
 ## Kurulum
@@ -105,10 +106,60 @@ Bunların yanında motor şu kontrolleri yapar:
 - **Önbellek:** Bitiş tarihi geçmişte olan veriler `~/.cache/marketalyzer` altında saklanır (`MARKETALYZER_CACHE_DIR` ile değiştirilebilir). Yahoo düzeltmeleri sonradan değişirse bu klasörü sil.
 - **Lisans:** backtesting.py AGPL-3.0 lisanslıdır. Kişisel kullanımda sorun yoktur. Proje bir ağ servisi olarak başkalarına sunulursa AGPL'nin kaynak kodu paylaşma şartı devreye girer.
 
+## Paper trading (sanal hesap)
+
+Gerçek para ve gerçek emir kullanılmaz. Sanal hesabın nakdi, pozisyonları, emirleri ve işlemleri tek bir SQLite dosyasında tutulur (`~/.local/share/marketalyzer/paper/<hesap>.sqlite`, `MARKETALYZER_HOME` ile değiştirilebilir).
+
+```sh
+marketalyzer-paper init --cash 100000                 # sanal hesap aç
+marketalyzer-paper buy THYAO 100                      # piyasa emri
+marketalyzer-paper buy GARAN 50 --limit 129.5         # limit emir
+marketalyzer-paper sell THYAO 100 --stop 280 --gtc    # iptal edilene kadar geçerli stop emri
+marketalyzer-paper status                             # nakit, pozisyonlar, açık emirler
+marketalyzer-paper orders --all                       # emir geçmişi
+marketalyzer-paper fills                              # gerçekleşen işlemler
+marketalyzer-paper cancel 3                           # emir iptali
+
+# Stratejiyi gecikmeli canlı veriyle çalıştır: her dakika yeni barları işler
+marketalyzer-paper run THYAO GARAN -s sma_cross -p fast=20 -p slow=100
+
+# Tek adım çalıştırıp çık (zamanlanmış görev veya yapay zeka ajanı için)
+marketalyzer-paper run THYAO -s sma_cross --once
+
+# Geçmiş günleri canlıymış gibi oynat (5 dakikalık barlarda son 60 gün)
+marketalyzer-paper replay THYAO -s sma_cross --start 2026-09-01
+```
+
+Her komut `--json` ile makinece okunabilir çıktı verir. Birden fazla hesap için `--account AD` kullanılır.
+
+### Nasıl çalışır
+
+- **Emir değerlendirme:** emirler, verildikleri andan sonra başlayan ilk bardan itibaren değerlendirilir.
+  - Piyasa emri barın açılışından gerçekleşir.
+  - Limit emir, bar limit fiyata değdiğinde gerçekleşir. Bar limitin ötesinde açılırsa daha iyi olan açılış fiyatı kullanılır.
+  - Stop emri, bar stop fiyatına değdiğinde piyasa emrine dönüşür.
+- **Gecikme:** Yahoo verisi yaklaşık 15 dakika gecikmelidir. Bu dolum fiyatını değil, yalnızca onayın zamanını etkiler. Saat 14:00'te verilen piyasa emri 14:00 barının açılışından gerçekleşir, ama bu bar tamamlanıp veri gecikmesi geçtikten sonra, yaklaşık 14:20'de görünür.
+- **Maliyetler:** komisyon, BSMV ve asgari komisyon backtest'teki gibi hesaplanır. Gidiş-dönüş kayma oranının yarısı her piyasa ve stop işleminde uygulanır, fiyat da BIST fiyat adımına aleyhe yuvarlanır.
+- **Emir kuralları:**
+  - Limit ve stop fiyatları fiyat adımına uymalıdır.
+  - Elde olmayan hisse satılamaz; yalnızca uzun pozisyon açılabilir.
+  - Alımlarda satın alma gücü, açık emirler düşülerek kontrol edilir.
+- **Geçerlilik:** günlük (`day`) emirler seans bitince, `--gtc` emirler iptal edilene kadar geçerlidir. 18:10'dan sonra verilen günlük emir bir sonraki seansa kalır.
+- **Strateji sinyalleri:** backtest'teki strateji sınıflarıyla, tamamlanmış günlük barlardan hesaplanır. Sinyal kapanışta oluşur, emir bir sonraki seansın ilk barında gerçekleşir; zamanlama backtest ile aynıdır.
+  - Strateji pozisyona girmek istediğinde, sembolün özsermayedeki payının %98'iyle alır. %2'lik nakit tamponu, fiyat emir dolmadan önce yükselirse emrin reddedilmemesi içindir.
+  - Nakde dönmek istediğinde tüm pozisyonu satar. `run`, verilen sembollerdeki pozisyonların tamamını yönetir; elle açılmış pozisyonlar da buna dahildir.
+- **Eşzamanlı kullanım:** `run` çalışırken başka bir terminalden veya bir yapay zeka ajanından aynı hesaba güvenle emir verilebilir.
+
+### Kısıtlar
+
+- Kısmi gerçekleşme yoktur. Emir, hacimden bağımsız olarak tamamen dolar; az işlem gören hisselerde sonuç iyimser olur.
+- Taban ve tavan fiyat limitleri, açılış ve kapanış seansı eşleşmeleri ve emir defteri derinliği modellenmez.
+- Temettüler sanal hesaba nakit olarak yansımaz ve bölünmeler pozisyon adedini değiştirmez. Bu olayları kapsayan dönemlerde sonucu elle düzeltin.
+
 ## Geliştirme
 
 ```sh
-pytest                                  # backtest motoru testleri
+pytest                                  # backtest ve paper trading testleri
 (cd providers/bist && pytest)           # sağlayıcı testleri
 ruff check . && ruff format --check .
 ```
@@ -119,5 +170,5 @@ Testler ağa çıkmaz. Fiyatlar sentetik veridir.
 
 1. **Veri katmanı:** `openbb-bist` sağlayıcısı. ✅
 2. **Backtest motoru:** BIST maliyetleri, fiyat adımları, optimizasyon ve test dönemi ayrımı, USD bazında getiri. ✅
-3. **Paper trading:** sanal bir aracı kurum ve emir defteri simülasyonu. Yahoo verisi yaklaşık 15 dakika gecikmeli olduğu için gerçek zamanlıya yakın test için lisanslı bir veri kaynağı gerekir.
-4. **Yapay zeka katmanı:** OpenBB'nin MCP sunucusu (`openbb-mcp`) ve `marketalyzer-backtest --json` üzerinden çalışan, stratejileri yalnızca backtest ve paper trading ortamında öneren veya değerlendiren bir ajan.
+3. **Paper trading:** SQLite tabanlı sanal hesap, bar tabanlı emir eşleştirme, strateji döngüsü ve replay. ✅ Sonraki adımlar: temettü ve bölünme olaylarının hesaba yansıması, kısmi gerçekleşme ve taban/tavan limitleri. Gerçek zamanlıya yakın test için lisanslı bir veri kaynağı gerekir.
+4. **Yapay zeka katmanı:** `marketalyzer-backtest --json`, `marketalyzer-paper --json` ve OpenBB'nin MCP sunucusu (`openbb-mcp`) üzerinden çalışan, stratejileri yalnızca backtest ve paper trading ortamında öneren, deneyen ve değerlendiren bir ajan.
