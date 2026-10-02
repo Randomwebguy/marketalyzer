@@ -542,7 +542,13 @@ class Decider:
             extra["response_format"] = {"type": "json_object"}
         return extra
 
-    def _ask(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    def ask(
+        self, messages: list[dict[str, Any]], max_tokens: int = MAX_TOKENS
+    ) -> dict[str, Any]:
+        """Send one request with the preset's settings (JSON mode, reasoning).
+
+        A model that rejects them gets the request again without them.
+        """
         extra = self._extra()
         try:
             return self.complete(
@@ -550,7 +556,7 @@ class Decider:
                 self.model,
                 messages,
                 temperature=TEMPERATURE,
-                max_tokens=MAX_TOKENS,
+                max_tokens=max_tokens,
                 extra=extra,
                 timeout=TIMEOUT,
             )
@@ -563,7 +569,7 @@ class Decider:
                 self.model,
                 messages,
                 temperature=TEMPERATURE,
-                max_tokens=MAX_TOKENS,
+                max_tokens=max_tokens,
                 extra=dict(ROUTING),
                 timeout=TIMEOUT,
             )
@@ -585,7 +591,7 @@ class Decider:
             return decision
         started = time.perf_counter()
         try:
-            answer = self._ask(messages)
+            answer = self.ask(messages)
             decision = parse_decision(answer["text"], holding)
         except (OpenRouterError, ValueError) as error:
             message = (

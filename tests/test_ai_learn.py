@@ -54,19 +54,33 @@ def test_strategy_brief_is_cached_and_falls_back(tmp_path):
     calls = []
 
     def complete(api_key, model, messages, **kwargs):
-        calls.append(messages)
-        return answer_text('{"tur": "dönüş", "ozet": "Düşüşte alır."}')
+        calls.append((messages, kwargs))
+        return answer_text('{"tur": "ortalamaya dönüş", "ozet": "Düşüşte alır."}')
 
     cache = DecisionCache(tmp_path / "c.sqlite")
-    decider = Decider("k", "m", cache=cache, complete=complete)
+    decider = Decider("k", "m", cache=cache, json_mode=True, complete=complete)
     brief = {"tur": "dönüş", "ozet": "Düşüşte alır."}
     assert learn.strategy_brief(decider, STRATEGY) == brief
     assert learn.strategy_brief(decider, STRATEGY) == brief
     assert len(calls) == 1
-    assert calls[0][0]["content"] == learn.BRIEF_SYSTEM
-    assert calls[0][1]["content"] == STRATEGY
+    messages, kwargs = calls[0]
+    assert messages[0]["content"] == learn.BRIEF_SYSTEM
+    assert messages[1]["content"] == STRATEGY
+    # The decision model's settings and room for reasoning before the answer.
+    assert kwargs["extra"]["response_format"] == {"type": "json_object"}
+    assert kwargs["max_tokens"] == learn.BRIEF_TOKENS
     broken = Decider("k", "m", complete=lambda *a, **k: answer_text("yok"))
     assert learn.strategy_brief(broken, STRATEGY) == {"tur": "bilinmiyor", "ozet": ""}
+
+
+def test_brief_types_are_read_leniently():
+    def brief(kind):
+        return learn._parse_brief(json.dumps({"tur": kind, "ozet": "x"}))["tur"]
+
+    assert brief("trend takibi") == "trend"
+    assert brief("trend ve kırılım") == "karma"
+    assert brief("momentum") == "karma"
+    assert brief("") == "bilinmiyor"
 
 
 def test_views_carry_strategy_context_from_before_the_test():

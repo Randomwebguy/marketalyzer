@@ -21,13 +21,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from marketalyzer.ai.decide import TIMEOUT
 from marketalyzer.ai.openrouter import OpenRouterError, complete_chat, stream_chat
 from marketalyzer.services import number
 
 _DATE = re.compile(r"\b(19|20)\d\d-\d\d-\d\d\b")
 TYPES = ("dönüş", "trend", "kırılım", "karma")
-MAX_BRIEF = 300
+MAX_BRIEF = 400
+BRIEF_TOKENS = 800
 # Bars after the next open over which a sell, a hold or an untraded entry is judged.
 HORIZON = 10
 # Recent outcomes listed in each view.
@@ -97,10 +97,13 @@ def _parse_brief(text: str) -> dict[str, str]:
         return dict(UNKNOWN)
     if not isinstance(data, dict):
         return dict(UNKNOWN)
-    kind = str(data.get("tur") or "").strip().lower()
+    said = str(data.get("tur") or "").strip().lower()
+    # "ortalamaya dönüş" is a dönüş strategy; a mix of words is karma.
+    named = [kind for kind in TYPES if kind in said]
+    kind = named[0] if len(named) == 1 else ("karma" if named or said else "")
     summary = " ".join(str(data.get("ozet") or "").split())
     summary = _DATE.sub("", summary)[:MAX_BRIEF].strip()
-    if kind not in TYPES or not summary:
+    if not kind or not summary:
         return dict(UNKNOWN)
     return {"tur": kind, "ozet": summary}
 
@@ -123,14 +126,8 @@ def strategy_brief(decider: Any, source: str) -> dict[str, str]:
         {"role": "user", "content": source},
     ]
     try:
-        text = decider.complete(
-            decider.api_key,
-            decider.model,
-            messages,
-            temperature=0.0,
-            max_tokens=200,
-            timeout=TIMEOUT,
-        )["text"]
+        # Reasoning models spend tokens before answering: leave them room.
+        text = decider.ask(messages, max_tokens=BRIEF_TOKENS)["text"]
     except OpenRouterError:
         return dict(UNKNOWN)
     brief = _parse_brief(text)
