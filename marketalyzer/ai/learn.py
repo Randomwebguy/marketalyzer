@@ -35,10 +35,11 @@ RECENT = 6
 # Lessons are rewritten once this many new outcomes are known.
 REFLECT_EVERY = 6
 MAX_LESSONS = 5
-MAX_LESSON = 200
+MAX_LESSON = 300
 # The most recent outcomes the coach reads.
 REFLECT_ITEMS = 40
 REFLECT_TIMEOUT = (10.0, 90.0)
+REFLECT_TOKENS = 1500
 
 REFLECT_SYSTEM = """Sen Borsa İstanbul kör testinde strateji sinyallerini onaylayan ya da
 reddeden hızlı bir karar modelinin koçusun. Sana stratejinin özeti ve test öncesi
@@ -221,6 +222,8 @@ class Journal:
         self.lessons: list[str] = []
         self.history: list[dict[str, Any]] = []
         self.cost = 0.0  # what writing the lessons cost, in USD
+        self.reflections = 0  # coach calls
+        self.unusable = 0  # calls that failed or gave no usable lesson
         self._marked = 0
 
     def add(
@@ -319,10 +322,12 @@ def clean_lessons(items: list[str], codes: list[str]) -> list[str]:
     lessons = []
     for item in items:
         text = " ".join(str(item).split()).strip(" -•*")
-        if not text or len(text) > MAX_LESSON or _DATE.search(text):
+        if not text or _DATE.search(text) or (tickers and tickers.search(text)):
             continue
-        if tickers and tickers.search(text):
-            continue
+        if len(text) > MAX_LESSON:  # Shorten at a word, keep the lesson.
+            cut = text[:MAX_LESSON]
+            cut = cut[: cut.rfind(" ")] if " " in cut else cut
+            text = cut.rstrip(" ,;:") + "…"
         lessons.append(text)
         if len(lessons) == MAX_LESSONS:
             break
@@ -364,16 +369,21 @@ def reflect(
         {"role": "system", "content": REFLECT_SYSTEM},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
     ]
+    journal.reflections += 1
     try:
         answer = coach.complete(
             coach.api_key,
             coach.model,
             messages,
             temperature=0.2,
-            max_tokens=800,
+            max_tokens=REFLECT_TOKENS,
             timeout=REFLECT_TIMEOUT,
         )
     except OpenRouterError:
+        journal.unusable += 1
         return None
     journal.cost += float((answer.get("usage") or {}).get("cost") or 0.0)
-    return clean_lessons(parse_lessons(answer["text"]), codes) or None
+    lessons = clean_lessons(parse_lessons(answer["text"]), codes)
+    if not lessons:
+        journal.unusable += 1
+    return lessons or None

@@ -227,20 +227,22 @@ def test_rejected_entries_learn_from_the_signal_trade():
 
 
 def test_lessons_drop_tickers_dates_and_extras():
+    long = "Sinyali uygula, " + "çünkü sonuçlar bunu gösteriyor " * 20
     items = [
         "  RSI<30 iken sinyali uygula ",
         "THYAO'da dikkatli ol",
         "2025-01-02 sonrası temkinli ol",
-        "x" * 400,
+        long,
         *"abcdef",
     ]
-    assert learn.clean_lessons(items, ["THYAO"]) == [
-        "RSI<30 iken sinyali uygula",
-        "a",
-        "b",
-        "c",
-        "d",
-    ]
+    lessons = learn.clean_lessons(items, ["THYAO"])
+    assert lessons[0] == "RSI<30 iken sinyali uygula"
+    # A long lesson is shortened at a word, not dropped.
+    assert lessons[1].startswith("Sinyali uygula,") and lessons[1].endswith(
+        "gösteriyor…"
+    )
+    assert len(lessons[1]) <= learn.MAX_LESSON + 1
+    assert lessons[2:] == ["a", "b", "c"]
     assert learn.parse_lessons('{"dersler": ["bir", "iki"]}') == ["bir", "iki"]
     assert learn.parse_lessons("Dersler:\n- bir\n• iki\n3. üç") == ["bir", "iki", "üç"]
 
@@ -285,6 +287,9 @@ def test_a_failing_coach_keeps_the_test_going():
         coach=learn.Coach("k", "koç", complete=broken),
     )
     assert result["learning"]["lessons"] == []
+    assert (
+        result["learning"]["unusable_reflections"] == result["learning"]["reflections"]
+    )
     assert result["ai"]["decisions"] > 0
 
 

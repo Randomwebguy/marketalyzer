@@ -1374,6 +1374,8 @@ def _report_learning(
         "resolved": resolved,
         "lessons": list(journal.lessons),
         "history": list(journal.history),
+        "reflections": journal.reflections,
+        "unusable_reflections": journal.unusable,
         "cost_usd": number(journal.cost, 4),
     }
     result["audit"]["notes"].append(
