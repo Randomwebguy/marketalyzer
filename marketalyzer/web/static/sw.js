@@ -1,10 +1,13 @@
 // Service worker: makes the app installable and keeps its static shell
 // available offline. API responses are never cached, so data is always live.
-const CACHE = "marketalyzer-v1";
+const CACHE = "marketalyzer-v2";
 const SHELL = [
   "/static/app.css",
   "/static/app.js",
-  "/static/charts.js",
+  "/static/js/core.js",
+  "/static/js/charts.js",
+  "/static/fonts/geist-latin.woff2",
+  "/static/fonts/doto-latin.woff2",
   "/static/icons/icon-192.png",
 ];
 

@@ -58,7 +58,14 @@ from marketalyzer.scripting import (
 )
 
 STATIC = Path(__file__).with_name("static")
-PUBLIC = ("/static/", "/login", "/manifest.webmanifest", "/sw.js", "/favicon.ico")
+PUBLIC = (
+    "/static/",
+    "/login",
+    "/logout",
+    "/manifest.webmanifest",
+    "/sw.js",
+    "/favicon.ico",
+)
 COOKIE_DAYS = 30
 KEEPALIVE_SECONDS = 15
 Interval = Literal["5m", "15m", "30m", "1h", "1d", "1W"]
@@ -273,6 +280,12 @@ def create_app(
             return RedirectResponse("/?error=1", status_code=303)
         return remember(request, RedirectResponse("/", status_code=303))
 
+    @app.get("/logout")
+    def logout() -> RedirectResponse:
+        response = RedirectResponse("/", status_code=303)
+        response.delete_cookie("token")
+        return response
+
     @app.get("/manifest.webmanifest")
     def manifest() -> FileResponse:
         return FileResponse(
@@ -308,6 +321,13 @@ def create_app(
     def prices(symbol: str, span: str = "3A") -> dict[str, Any]:
         try:
             return services.prices(symbol, span)
+        except Exception as error:
+            raise _fail(error) from error
+
+    @app.get("/api/fx")
+    def fx(pair: str = "USDTRY") -> dict[str, Any]:
+        try:
+            return services.fx(pair)
         except Exception as error:
             raise _fail(error) from error
 

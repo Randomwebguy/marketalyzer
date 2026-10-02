@@ -21,7 +21,7 @@ import pandas as pd
 from backtesting import Strategy
 
 from marketalyzer.backtest.costs import BistCosts
-from marketalyzer.backtest.data import load_ohlcv
+from marketalyzer.backtest.data import load_fx, load_ohlcv
 from marketalyzer.backtest.engine import BacktestReport, optimize_backtest, run_backtest
 from marketalyzer.backtest.strategies import STRATEGIES, get_strategy, strategy_params
 from marketalyzer.paper.account import PaperAccount, normalize_symbol
@@ -192,6 +192,20 @@ def quote(symbol: str) -> dict[str, Any]:
         "volume": number(volume.iloc[-1], 0) if volume is not None else None,
         "date": frame.index[-1].date().isoformat(),
         "spark": [round(float(v), 4) for v in close.iloc[-30:]],
+    }
+
+
+def fx(pair: str = "USDTRY") -> dict[str, Any]:
+    """Return the last daily close of a currency pair, to show amounts in USD."""
+    end = today()
+    frame = load_fx(pair, end - timedelta(days=20), end, cache=False)
+    close = frame["Close"]
+    previous = float(close.iloc[-2]) if len(close) > 1 else float(close.iloc[-1])
+    return {
+        "pair": pair.upper(),
+        "last": number(close.iloc[-1]),
+        "change_pct": number((close.iloc[-1] / previous - 1) * 100, 2),
+        "date": stamp(frame.index[-1]),
     }
 
 
@@ -609,7 +623,9 @@ def walkforward(
         {"t": point["time"][:10], "v": round(point["equity"], 2)}
         for point in report.equity_curve
     ]
-    return {**report.summary(), "equity": thin(curve)}
+    body = report.summary()
+    # "equity" is the curve for charts; the final amount moves to equity_final.
+    return {**body, "equity_final": body["equity"], "equity": thin(curve)}
 
 
 def _script(name: str | None, source: str | None):
@@ -627,6 +643,29 @@ def _series_values(values: np.ndarray, digits: int = 4) -> list[float | None]:
     return [None if not math.isfinite(x) else round(float(x), digits) for x in values]
 
 
+def _transitions(
+    entries: np.ndarray | None, exits: np.ndarray | None
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Keep only the signals that change the position, as a chart shows trades.
+
+    A strategy usually repeats its signal on every bar the condition holds; the
+    first entry while flat and the first exit while long are the ones that act.
+    """
+    if entries is None or exits is None:
+        return entries, exits
+    first_entries = np.zeros_like(entries)
+    first_exits = np.zeros_like(exits)
+    long = False
+    for i in range(len(entries)):
+        if long and exits[i]:
+            first_exits[i] = True
+            long = False
+        elif not long and entries[i]:
+            first_entries[i] = True
+            long = True
+    return first_entries, first_exits
+
+
 def script_payload(script, result, frame: pd.DataFrame, shown) -> dict[str, Any]:
     """Return a script's output on the shown bars, for drawing on a chart."""
     start = 0
@@ -639,6 +678,8 @@ def script_payload(script, result, frame: pd.DataFrame, shown) -> dict[str, Any]
         if mask is None:
             return []
         return [times[i] for i in np.flatnonzero(mask[start:])]
+
+    entries, exits = _transitions(result.entries, result.exits)
 
     return {
         "script": script.describe(),
@@ -676,8 +717,8 @@ def script_payload(script, result, frame: pd.DataFrame, shown) -> dict[str, Any]
             }
             for alert in result.alerts
         ],
-        "entries": marks(result.entries),
-        "exits": marks(result.exits),
+        "entries": marks(entries),
+        "exits": marks(exits),
         "warnings": result.warnings,
     }
 
@@ -809,13 +850,15 @@ def screen(
             "shapes": [s.title for s in result.shapes if len(s.mask) and s.mask[-1]],
         }
         if result.entries is not None:
-            entries = np.flatnonzero(result.entries)
-            exits = np.flatnonzero(result.exits)
-            last_entry = entries[-1] if len(entries) else -1
-            last_exit = exits[-1] if len(exits) else -1
-            row["entry_signal"] = bool(result.entries[-1])
-            row["exit_signal"] = bool(result.exits[-1])
-            row["in_position"] = bool(last_entry > last_exit)
+            entries, exits = _transitions(result.entries, result.exits)
+            last_entry = np.flatnonzero(entries)
+            last_exit = np.flatnonzero(exits)
+            row["entry_signal"] = bool(entries[-1])
+            row["exit_signal"] = bool(exits[-1])
+            row["in_position"] = bool(
+                len(last_entry)
+                and (not len(last_exit) or last_entry[-1] > last_exit[-1])
+            )
         return row
 
     with ThreadPoolExecutor(max_workers=min(6, max(len(codes), 1))) as pool:

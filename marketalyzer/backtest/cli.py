@@ -7,9 +7,22 @@ from typing import Any
 
 from marketalyzer.backtest.costs import BistCosts
 from marketalyzer.backtest.engine import optimize_backtest, run_backtest
-from marketalyzer.backtest.strategies import STRATEGIES
+from marketalyzer.backtest.strategies import STRATEGIES, get_strategy
 
 INTERVALS = ["1m", "2m", "5m", "15m", "30m", "1h", "1d", "1W", "1M"]
+STRATEGY_HELP = (
+    f"{', '.join(sorted(STRATEGIES))} ya da script:<ad> (ör. script:rsi_reversion)"
+)
+
+
+def strategy_name(value: str) -> str:
+    """Accept a built-in strategy name or ``script:<name>`` of a stored script."""
+    try:
+        get_strategy(value)
+    except Exception as error:  # Unknown name or a script that does not compile.
+        raise argparse.ArgumentTypeError(str(error)) from None
+    return value
+
 
 LABELS = {
     "symbol": "Sembol",
@@ -94,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("symbol", help="BIST kodu, ör. THYAO veya XU100")
     parser.add_argument(
-        "-s", "--strategy", default="sma_cross", choices=sorted(STRATEGIES)
+        "-s", "--strategy", default="sma_cross", type=strategy_name, help=STRATEGY_HELP
     )
     parser.add_argument("--start", help="YYYY-AA-GG (varsayılan: 1 yıl önce)")
     parser.add_argument("--end", help="YYYY-AA-GG (varsayılan: bugün)")

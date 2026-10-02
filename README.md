@@ -10,9 +10,12 @@ Borsa İstanbul (BIST) üzerinde yapay zeka destekli strateji denemeleri için b
 providers/bist/          openbb-bist: OpenBB ODP V5 için BIST veri sağlayıcısı
 marketalyzer/backtest/   backtesting.py üzerine kurulu BIST backtest motoru
 marketalyzer/paper/      sanal hesapla paper trading simülatörü
+marketalyzer/scripting/  TradingView Pine Script benzeri gösterge ve strateji dili
+marketalyzer/ai/         OpenRouter üzerinden çalışan, araç kullanan yapay zeka asistanı
+marketalyzer/services.py web API'si ve asistan araçlarının ortak işlemleri
 marketalyzer/web/        web uygulaması (FastAPI + kurulabilir PWA)
 scripts/tunnel.sh        arayüzü Cloudflare tüneliyle yayınlama
-tests/                   backtest ve paper trading testleri
+tests/                   testler (ağa çıkmaz, sentetik veri kullanır)
 ```
 
 ## Kurulum
@@ -175,22 +178,64 @@ marketalyzer-paper walkforward THYAO -s sma_cross --start 2018-01-01 --train 504
 - Temettüler yalnızca günlük barlarla (`--interval 1d`) nakit olarak ödenir; varsayılan stopaj oranı %15'tir (`--dividend-tax`, güncel oranı kontrol edin). Dakikalık barlarda temettü yansımaz.
 - Bölünme ve bedelsiz sermaye artırımlarında replay, bölünmeye göre düzeltilmiş fiyatlarla çalıştığı için sonuç tutarlıdır. Canlı çalışan bir hesapta ise bölünme günü pozisyon adedi değişmez; bunu elle düzeltmek gerekir.
 
+## Script dili (Pine Script benzeri)
+
+Göstergeler ve stratejiler TradingView Pine Script v5'e çok yakın bir dille yazılır; yaygın scriptler küçük değişikliklerle ya da hiç değiştirilmeden çalışır. Scriptler `marketalyzer/scripting/library/` altındaki hazır kütüphaneyle birlikte gelir (SMA kesişimi, RSI dönüşü, MACD + trend filtresi, Bollinger dönüşü, Supertrend, Donchian kırılımı, RSI, MACD, Bollinger bantları). Kendi scriptleriniz `~/.local/share/marketalyzer/scripts/` altında saklanır.
+
+```pine
+//@version=5
+strategy("RSI + trend", overlay=false)
+length = input.int(14, "RSI", minval=7, maxval=21, step=7)   // minval/maxval/step = optimizasyon ızgarası
+r = ta.rsi(close, length)
+plot(r, "RSI", color=color.purple)
+hline(30, "Aşırı satım")
+if ta.crossover(r, 30) and close > ta.sma(close, 200)
+    strategy.entry("Al", strategy.long)
+    strategy.exit("Stop", "Al", stop=close * 0.93)
+if r > 70
+    strategy.close("Al")
+```
+
+- **Desteklenenler:** `indicator()`/`strategy()`, `input.*` (parametre adı, atandığı değişkenin adıdır), `=`/`:=`/`+=`, `if / else if / else`, `var`, `x[1]` geçmiş referansı, `?:`, `and/or/not`, `na`/`nz()`, `[a, b] = ...`, kullanıcı fonksiyonları (`f(x) => ...`), 50'yi aşkın `ta.*` fonksiyonu (sma, ema, rma, wma, hma, rsi, macd, bb, stoch, atr, dmi, supertrend, sar, kc, vwap, pivothigh, crossover, barssince, valuewhen …), `math.*`, `plot`, `plotshape`, `hline`, `alertcondition`, `strategy.entry/close/exit` ve `strategy.position_size`.
+- **Desteklenmeyenler:** döngüler, diziler, `request.security`, çizim nesneleri (etiket, çizgi, kutu, tablo; yok sayılır) ve iz süren stop. Hatalar satır numarasıyla Türkçe raporlanır.
+- **Nasıl çalışır:** İfadelerin çoğu numpy ile tüm barlar üzerinde bir kerede hesaplanır, bu yüzden optimizasyonlarda bile hızlıdır. Kendi geçmişine bağlı ifadeler (`var` değişkenleri, `x := nz(x[1]) + 1`, `strategy.position_size`) Pine'daki gibi bar bar yorumlanır. Her iki aşama da nedenseldir; script hiçbir barda gelecekteki veriyi göremez.
+- **Strateji olarak:** `strategy()` ile bildirilen her script bir backtesting.py stratejisine dönüşür ve `script:<ad>` adıyla backtest, optimizasyon, walk-forward, tarama ve paper trading'de kullanılır. Emirler sinyal barından sonraki açılışta gerçekleşir; açığa satış yoktur (`strategy.short` girişi pozisyonu kapatır) ve komisyon her zaman BIST maliyetleridir. Hazır `sma_cross` scripti, yerleşik `SmaCross` stratejisiyle birebir aynı işlemleri üretir.
+
+```sh
+marketalyzer-backtest THYAO --strategy script:rsi_reversion --optimize
+```
+
+## Yapay zeka asistanı (OpenRouter)
+
+Asistan, [OpenRouter](https://openrouter.ai) üzerinden seçtiğiniz modeli kullanır ve uygulamanın araçlarıyla çalışır: piyasa özeti, fiyatlar ve fiyat geçmişi, teknik analiz özeti, script yazma/doğrulama/kaydetme/çalıştırma, çok hisseli tarama, backtest, optimizasyon (holdout testiyle), walk-forward ve sanal hesap. Her sayıyı araçlardan alacak, aşırı uyum ve az işlem sayısı gibi riskleri belirtecek ve yatırım tavsiyesi vermeyecek şekilde yönlendirilir.
+
+- **API anahtarı:** [openrouter.ai/keys](https://openrouter.ai/keys) adresinden alınan anahtar arayüzde **Ayarlar → Yapay zeka** bölümüne girilir ya da sunucuyu başlatırken `OPENROUTER_API_KEY` ortam değişkeniyle verilir. Anahtar sunucuda yalnızca sizin okuyabileceğiniz bir dosyada (`~/.local/share/marketalyzer/ai/settings.json`, izin 600) saklanır, tarayıcıya ve depoya hiçbir zaman gönderilmez; arayüzde yalnızca son 4 karakteri görünür.
+- **Model:** Ayarlar'da OpenRouter'daki araç kullanabilen modeller fiyatlarıyla listelenir. Seçilmezse araç kullanabilen en yeni Claude Sonnet modeli otomatik seçilir. `MARKETALYZER_AI_MODEL` ile de sabitlenebilir.
+- **Sanal emir izni:** Asistanın sanal hesapta emir verip iptal edebilmesi için Ayarlar'da ayrıca izin verilmelidir (varsayılan kapalı). Gerçek emir hiçbir durumda yoktur.
+- **Maliyet:** Kullanım ücreti OpenRouter hesabınızdan düşer; her sohbetin token sayısı ve maliyeti arayüzde gösterilir.
+- Sohbetler `~/.local/share/marketalyzer/ai/conversations/` altında saklanır. Yanıtlar sunucudan akış (SSE) olarak gelir; uzun backtestlerde tünelin bağlantıyı kesmemesi için düzenli canlılık sinyali gönderilir.
+
 ## Web uygulaması ve Cloudflare tüneli
 
-Karanlık temalı, uygulama hissi veren bir arayüz. Masaüstünde kenar çubuğu ve kart (widget) ızgarası, telefonda alt sekme çubuğu kullanılır. Dört bölümden oluşur:
+Masaüstünde pencere çerçeveli, kenar çubuklu bir uygulama; telefonda alt sekme çubuğu ve alttan açılan sayfalarla yerel uygulama hissi veren bir arayüz. Kenar çubuğundaki **Piyasa / Lab** anahtarı iki çalışma alanı arasında geçiş yapar:
 
-- **Panel:** toplam varlık ve özsermaye grafiği, K/Z kutuları, portföy dağılımı, mini grafikli izleme listesi, mum grafiği (1 gün – 5 yıl), pozisyonlar ve son işlemler.
-- **İşlem:** al/sat emri (piyasa, limit, stop; fiyat adımı kontrolü ve tahmini maliyetle), açık ve geçmiş emirler, "veriyi işle" ve hesap ayarları.
-- **Backtest:** strateji seçimi ve parametreleri, optimizasyon, strateji ile al-tut karşılaştırma grafiği, XU100 ve USD bazında getiri, işlem listesi.
-- **Walk-forward:** pencere pencere ileriye dönük test ve sonuçları.
+- **Panel:** dot-matrix tahmini bakiye (TL/USD, gizlenebilir), günlük K/Z, pozisyon kartları (al/sat/analiz), yapay zeka kartı, özsermaye ile BIST 100 karşılaştırması, seans saatli hızlı emir kartı, tutar → lot hesaplayıcı.
+- **Piyasa:** izleme listesi, mum/çizgi grafik, fiyat grafiğine ya da ayrı panellere eklenebilen script göstergeleri, teknik özet (RSI, stokastik, ADX, Bollinger %B, 52 hafta aralığı, hacim, hareketli ortalamalar, pivot destek/direnç).
+- **Emirler / İşlem:** açık ve geçmiş emirler, pozisyonlar, dağılım, gerçekleşen işlemler, emir fişi, strateji ile işleme ve hesap ayarları. Kenar çubuğunda açık emir kartı ve seans yayı.
+- **Script editörü:** sözdizimi renklendirme, satır numaraları, otomatik tamamlama, anlık derleme ve hata satırı, parametre formu, konsol, fonksiyon başvurusu; grafikte çalıştırma, backtest, optimizasyon ve walk-forward.
+- **Backtest, Walk-forward, Tarama:** hazır stratejiler ve script stratejileriyle.
+- **Asistan:** sohbet geçmişi, araç çağrılarının canlı gösterimi, Markdown yanıtlar, scriptleri tek tıkla editörde açma, sembol ve editördeki scripti bağlam olarak ekleme.
+- **Ayarlar:** OpenRouter anahtarı, model seçimi, emir izni, görünüm.
+
+<kbd>⌘/Ctrl</kbd>+<kbd>K</kbd> komut paletini açar (sembol, sayfa, script ve eylem araması). <kbd>B</kbd> emir, <kbd>A</kbd> asistan, <kbd>H</kbd> bakiyeleri gizle; editörde <kbd>Ctrl</kbd>+<kbd>↵</kbd> çalıştırır, <kbd>Ctrl</kbd>+<kbd>S</kbd> kaydeder.
 
 ```sh
 marketalyzer-web                 # http://127.0.0.1:8000/?token=... adresini yazdırır
 marketalyzer-web --demo          # internetsiz deneme: sentetik fiyatlar, ayrı "demo" hesabı
-scripts/tunnel.sh                # uygulamayı başlatır ve Cloudflare tüneliyle yayınlar
+OPENROUTER_API_KEY=sk-or-... scripts/tunnel.sh   # anahtarla başlatıp Cloudflare tüneliyle yayınlar
 ```
 
-Uygulama bir erişim anahtarıyla açılır. Adresteki `?token=...` bir kez kullanıldığında ya da giriş sayfasına anahtar yazıldığında tarayıcı onu 30 gün hatırlar. Sabit bir anahtar için `MARKETALYZER_TOKEN` ortam değişkeni kullanılabilir.
+Uygulama bir erişim anahtarıyla açılır. Adresteki `?token=...` bir kez kullanıldığında ya da giriş sayfasına anahtar yazıldığında tarayıcı onu 30 gün hatırlar; **Çıkış** bağlantısı çerezi siler. Sabit bir anahtar için `MARKETALYZER_TOKEN` ortam değişkeni kullanılabilir.
 
 **Uygulama olarak kurma (PWA):** tünel adresi HTTPS olduğu için uygulama telefona ve masaüstüne kurulabilir.
 - iPhone: Safari'de Paylaş → Ana Ekrana Ekle. Ana ekrandan ilk açılışta erişim anahtarını bir kez girin; ana ekran uygulamaları Safari'nin çerezlerini paylaşmaz.
@@ -199,14 +244,14 @@ Uygulama bir erişim anahtarıyla açılır. Adresteki `?token=...` bir kez kull
 
 `scripts/tunnel.sh` için [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) kurulu olmalıdır. Betik geçici bir `https://<rastgele>.trycloudflare.com` adresi açar ve anahtarla birlikte tam adresi yazdırır. Adresi bilen herkes uygulamaya erişebileceği için paylaşmayın. Tünel, betik çalıştığı sürece açık kalır.
 
-Arayüzün yönettiği paper hesap `web` adını taşır (demo modunda `demo`). Komut satırından `marketalyzer-paper --account web status` ile de görülebilir. Uygulama ikonları `scripts/make_icons.py` ile yeniden üretilebilir.
+Arayüzün yönettiği paper hesap `web` adını taşır (demo modunda `demo`). Komut satırından `marketalyzer-paper --account web status` ile de görülebilir. Uygulama ikonları `scripts/make_icons.py` ile yeniden üretilebilir. Yazı tipleri (Geist, Geist Mono, Doto) SIL Open Font License ile `web/static/fonts/` altında birlikte gelir, böylece uygulama çevrimdışı da aynı görünür.
 
 Grafik renkleri, renk körlüğüne karşı doğrulanmış bir paletten seçildi. Yükseliş ve düşüş, renge ek olarak ▲/▼ işaretleri ve içi boş/dolu mumlarla da ayırt edilir. Her grafiğin bir tablo görünümü vardır. Saatler cihazın saat diliminden bağımsız olarak İstanbul saatiyle gösterilir.
 
 ## Geliştirme
 
 ```sh
-pytest                                  # backtest ve paper trading testleri
+pytest                                  # tüm testler (OpenRouter sahte akışla test edilir)
 (cd providers/bist && pytest)           # sağlayıcı testleri
 ruff check . && ruff format --check .
 ```
@@ -218,4 +263,5 @@ Testler ağa çıkmaz. Fiyatlar sentetik veridir.
 1. **Veri katmanı:** `openbb-bist` sağlayıcısı. ✅
 2. **Backtest motoru:** BIST maliyetleri, fiyat adımları, optimizasyon ve test dönemi ayrımı, USD bazında getiri. ✅
 3. **Paper trading:** SQLite tabanlı sanal hesap, bar tabanlı emir eşleştirme, strateji döngüsü, günlük ve dakikalık replay, temettü ödemeleri ve walk-forward testi. ✅ Sonraki adımlar: kısmi gerçekleşme, taban/tavan limitleri ve çok sembollü walk-forward. Gerçek zamanlıya yakın test için lisanslı bir veri kaynağı gerekir.
-4. **Yapay zeka katmanı:** `marketalyzer-backtest --json`, `marketalyzer-paper --json` ve OpenBB'nin MCP sunucusu (`openbb-mcp`) üzerinden çalışan, stratejileri yalnızca backtest ve paper trading ortamında öneren, deneyen ve değerlendiren bir ajan.
+4. **Script dili:** Pine Script benzeri gösterge ve stratejiler, editör, tarama. ✅
+5. **Yapay zeka katmanı:** OpenRouter üzerinden, uygulamanın araçlarıyla stratejileri yalnızca backtest ve paper trading ortamında öneren, yazan, deneyen ve değerlendiren asistan. ✅ Sonraki adımlar: zamanlanmış görevler (her akşam tarama ve özet), script alarmlarının bildirim olarak gönderilmesi, çoklu zaman dilimi (`request.security`).

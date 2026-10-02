@@ -3,46 +3,73 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0d0d0d">
+<meta name="theme-color" content="#0a0a0a">
 <meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="marketalyzer">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/static/icons/icon-192.png">
 <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="preload" href="/static/fonts/geist-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/static/fonts/doto-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/app.css">
 <title>marketalyzer</title>
 </head>
 <body>
-<div class="app">
-  <aside class="sidebar">
-    <div class="brand"><img src="/static/icons/icon-192.png" alt="">marketalyzer</div>
-    <nav class="nav" id="nav"></nav>
+<div class="app" id="app">
+  <aside class="sidebar" aria-label="Kenar çubuğu">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 40 40"><g fill="#f4f4f2"><rect x="17" y="3" width="6" height="6" rx="1.5"/><rect x="26" y="6" width="6" height="6" rx="1.5" opacity=".9"/><rect x="31" y="14" width="6" height="6" rx="1.5" opacity=".8"/><rect x="28" y="23" width="6" height="6" rx="1.5" opacity=".7"/><rect x="21" y="30" width="6" height="6" rx="1.5" opacity=".6"/><rect x="12" y="30" width="6" height="6" rx="1.5" opacity=".5"/><rect x="5" y="23" width="6" height="6" rx="1.5" opacity=".4"/><rect x="3" y="14" width="6" height="6" rx="1.5" opacity=".35"/><rect x="8" y="6" width="6" height="6" rx="1.5" opacity=".3"/></g></svg>
+      </span>
+      <div class="brand-text"><b>marketalyzer</b><span id="plan">Sanal hesap</span></div>
+      <a class="icon-btn ghost xs" href="#/ayarlar" aria-label="Ayarlar" title="Ayarlar">
+        <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 9l4-4 4 4M8 15l4 4 4-4"/></svg>
+      </a>
+    </div>
+    <div class="segmented mode block" id="mode" role="group" aria-label="Çalışma alanı">
+      <button type="button" data-mode="piyasa">Piyasa</button>
+      <button type="button" data-mode="lab">Lab</button>
+    </div>
+    <div class="nav-label">Gezinme</div>
+    <nav class="nav" id="nav" aria-label="Sayfalar"></nav>
+    <div class="nav-label" id="side-orders-label">Açık emirler <span class="badge red" id="orders-badge">0</span></div>
+    <div class="side-orders" id="side-orders"></div>
     <div class="sidebar-foot">
-      <div class="label">Sanal hesap</div>
-      <div class="value" id="side-equity">—</div>
-      <div class="label">Gerçek para kullanılmaz</div>
+      <button class="icon-btn round sm" type="button" id="help" aria-label="Kısayollar ve yardım" title="Yardım">
+        <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.5V14M12 17h.01"/></svg>
+      </button>
+      <button class="icon-btn round sm" type="button" id="currency" aria-label="Para birimini değiştir" title="TL / USD">₺</button>
     </div>
   </aside>
   <div class="main">
     <header class="topbar">
-      <div class="title">
-        <h1 id="page-title">Panel</h1>
-        <p id="page-sub"></p>
+      <div class="title"><h1 id="page-title">Panel</h1><p id="page-sub"></p></div>
+      <div class="top-actions">
+        <div class="idchip"><span class="dots" aria-hidden="true"></span><span id="account-id">Hesap</span></div>
+        <button class="icon-btn round" type="button" id="ask" aria-label="Asistan" title="Asistan">
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6.5 6.5l2 2M15.5 15.5l2 2M6.5 17.5l2-2M15.5 8.5l2-2"/></svg>
+        </button>
+        <div class="user">
+          <div class="avatar-pair" aria-hidden="true"><span>BI</span><span id="user-initials">SY</span></div>
+          <div class="who"><b id="user-name">Sanal yatırımcı</b><a href="/logout">Çıkış <svg class="i sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v16h-6M10 12h10M7 9l-3 3 3 3"/></svg></a></div>
+        </div>
+        <button class="btn outline" type="button" id="order-btn">
+          <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18M7 15h4"/></svg>
+          Emir ver
+        </button>
       </div>
-      <form class="search" id="search" role="search">
-        <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
-        <input name="symbol" placeholder="Sembol ara, ör. THYAO" autocomplete="off" spellcheck="false" maxlength="12" aria-label="Sembol ara">
-      </form>
-      <button class="icon-btn" id="refresh" type="button" title="Yenile" aria-label="Yenile">
-        <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
-      </button>
     </header>
-    <div class="demo-banner" id="demo-banner" hidden>Demo modu: fiyatlar sentetiktir, gerçek piyasa verisi değildir.</div>
-    <main id="view"></main>
+    <div class="demo-banner" id="demo-banner" hidden>
+      <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17h.01"/></svg>
+      Demo modu: fiyatlar sentetiktir, gerçek piyasa verisi değildir.
+    </div>
+    <main id="view" tabindex="-1"></main>
   </div>
-  <nav class="tabbar" id="tabbar"></nav>
+  <nav class="tabbar" id="tabbar" aria-label="Sekmeler"></nav>
 </div>
+<div id="layer"></div>
 <div id="toast" role="status" aria-live="polite"></div>
 <script type="module" src="/static/app.js"></script>
 </body>

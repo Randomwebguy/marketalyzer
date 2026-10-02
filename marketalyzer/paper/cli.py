@@ -9,10 +9,15 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-from marketalyzer.backtest.cli import grid_values, parse_pair, parse_value
+from marketalyzer.backtest.cli import (
+    STRATEGY_HELP,
+    grid_values,
+    parse_pair,
+    parse_value,
+    strategy_name,
+)
 from marketalyzer.backtest.costs import BistCosts
 from marketalyzer.backtest.data import load_ohlcv
-from marketalyzer.backtest.strategies import STRATEGIES
 from marketalyzer.paper.account import DIVIDEND_TAX, PaperAccount, normalize_symbol
 from marketalyzer.paper.feed import INTERVALS, FrameFeed, ProviderFeed
 from marketalyzer.paper.models import Order
@@ -146,7 +151,7 @@ def _add_account_options(parser: argparse.ArgumentParser) -> None:
 def _add_strategy_options(parser: argparse.ArgumentParser, required: bool) -> None:
     parser.add_argument("symbols", nargs="+", metavar="SEMBOL")
     parser.add_argument(
-        "-s", "--strategy", choices=sorted(STRATEGIES), required=required
+        "-s", "--strategy", type=strategy_name, required=required, help=STRATEGY_HELP
     )
     parser.add_argument(
         "-p",
@@ -214,7 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     walk.add_argument("symbol", metavar="SEMBOL")
     walk.add_argument(
-        "-s", "--strategy", choices=sorted(STRATEGIES), default="sma_cross"
+        "-s", "--strategy", type=strategy_name, default="sma_cross", help=STRATEGY_HELP
     )
     walk.add_argument("--start", required=True, help="YYYY-AA-GG (eğitim başlangıcı)")
     walk.add_argument("--end", help="YYYY-AA-GG (varsayılan: bugün)")

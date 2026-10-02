@@ -34,6 +34,31 @@ def test_cli_json(thyao, capsys):
     assert summary["params"] == {"fast": 5, "slow": 20}
 
 
+def test_cli_script_strategy(thyao, capsys):
+    code = main(
+        [
+            "THYAO",
+            *RANGE,
+            *OFFLINE,
+            "-s",
+            "script:sma_cross",
+            "-p",
+            "fastLength=5",
+            "--json",
+        ]
+    )
+    assert code == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["strategy"] == "script:sma_cross"
+    assert summary["params"]["fastLength"] == 5
+
+
+def test_cli_rejects_unknown_scripts(capsys):
+    with pytest.raises(SystemExit):
+        main(["THYAO", "-s", "script:yok"])
+    assert "Unknown script" in capsys.readouterr().err
+
+
 def test_cli_table(thyao, capsys):
     assert main(["THYAO", *RANGE, *OFFLINE, "--commission", "0.001"]) == 0
     out = capsys.readouterr().out

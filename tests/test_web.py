@@ -45,6 +45,9 @@ class TestAccess:
         for path in (
             "/static/app.css",
             "/static/app.js",
+            "/static/js/core.js",
+            "/static/js/pages/panel.js",
+            "/static/fonts/doto-latin.woff2",
             "/manifest.webmanifest",
             "/sw.js",
         ):
@@ -62,6 +65,12 @@ class TestAccess:
         app = anonymous.get("/")
         assert app.status_code == 200
         assert 'id="view"' in app.text
+
+    def test_logout_clears_the_cookie(self, anonymous):
+        anonymous.get(f"/?token={TOKEN}")
+        response = anonymous.get("/logout")
+        assert (response.status_code, response.headers["location"]) == (303, "/")
+        assert anonymous.get("/api/meta").status_code == 401
 
     def test_token_in_the_address_sets_the_cookie(self, anonymous):
         assert anonymous.get(f"/?token={TOKEN}").status_code == 200
@@ -85,6 +94,14 @@ def test_prices(client, thyao):
     _, params = thyao.calls[-1]
     assert params["adjustment"] == "splits_only"
     assert client.get("/api/prices?symbol=THYAO&span=10Y").status_code == 400
+
+
+def test_fx(client, fake_fetch, prices, as_rows):
+    fake_fetch.responses[("currency", "USDTRY")] = as_rows(prices)
+    body = client.get("/api/fx?pair=usdtry").json()
+    assert body["pair"] == "USDTRY"
+    assert body["last"] == pytest.approx(prices["Close"].iloc[-1], rel=1e-4)
+    assert client.get("/api/fx?pair=NOPE").status_code == 400
 
 
 def test_watchlist(client, thyao):
@@ -151,6 +168,7 @@ def test_walkforward(client, monkeypatch):
     result = client.post("/api/walkforward", json=body).json()
     assert len(result["windows"]) == 2
     assert result["equity"][0].keys() == {"t", "v"}
+    assert result["equity_final"] == result["equity"][-1]["v"]
 
 
 def test_paper_account(client, monkeypatch):
