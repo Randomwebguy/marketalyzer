@@ -1,4 +1,5 @@
 import json
+import os
 import stat
 
 import pytest
@@ -13,6 +14,8 @@ from marketalyzer.ai.settings import (
 )
 
 KEY = "sk-or-v1-0123456789abcdef0123456789abcdefWXYZ"
+# Windows has no POSIX permission bits; chmod only toggles read-only there.
+POSIX = os.name == "posix"
 
 
 @pytest.fixture(autouse=True)
@@ -46,10 +49,12 @@ def test_save_and_load(tmp_path):
 def test_file_is_private_and_written_atomically():
     save_settings(api_key=KEY)
     path = settings_path()
-    assert mode(path) == 0o600
-    assert mode(path.parent) == 0o700
+    if POSIX:
+        assert mode(path) == 0o600
+        assert mode(path.parent) == 0o700
     save_settings(model="openai/gpt-5")
-    assert mode(path) == 0o600
+    if POSIX:
+        assert mode(path) == 0o600
     assert [p.name for p in path.parent.iterdir()] == ["settings.json"]
 
 

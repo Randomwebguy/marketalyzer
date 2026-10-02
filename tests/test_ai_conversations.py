@@ -1,4 +1,5 @@
 import json
+import os
 import stat
 from itertools import count
 
@@ -55,7 +56,8 @@ def test_round_trip(tmp_path, clock):
     save_conversation(conversation)
     path = tmp_path / "home" / "ai" / "conversations" / f"{conversation['id']}.json"
     assert path.exists()
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if os.name == "posix":  # Windows has no POSIX permission bits
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
     loaded = load_conversation(conversation["id"])
     assert loaded == conversation
     assert loaded["title"] == "Bugün THYAO nasıl?"
