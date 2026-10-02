@@ -17,11 +17,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from marketalyzer.ai.decide import TIMEOUT
-from marketalyzer.ai.openrouter import OpenRouterError
+from marketalyzer.ai.openrouter import OpenRouterError, complete_chat, stream_chat
 from marketalyzer.services import number
 
 _DATE = re.compile(r"\b(19|20)\d\d-\d\d-\d\d\b")
@@ -31,6 +32,40 @@ MAX_BRIEF = 300
 HORIZON = 10
 # Recent outcomes listed in each view.
 RECENT = 6
+# Lessons are rewritten once this many new outcomes are known.
+REFLECT_EVERY = 6
+MAX_LESSONS = 5
+MAX_LESSON = 200
+# The most recent outcomes the coach reads.
+REFLECT_ITEMS = 40
+REFLECT_TIMEOUT = (10.0, 90.0)
+
+REFLECT_SYSTEM = """Sen Borsa İstanbul kör testinde strateji sinyallerini onaylayan ya da
+reddeden hızlı bir karar modelinin koçusun. Sana stratejinin özeti ve test öncesi
+sonucu, mevcut ders notları ve modelin sonucu belli olmuş kararları verilir; hisseler
+harfle anılır, tarih yoktur.
+
+Görevin, modelin sonuçlarından en fazla 5 kısa ve uygulanabilir ders çıkarmak:
+- Hangi durumlarda sinyali uygulamak kazandırdı, hangilerinde reddetmek doğruydu?
+  Kaçırılan kârlı sinyaller de hatadır: amaç getiriyi ve işlem sayısını artırmak,
+  gereksiz reddetmeyi azaltmaktır.
+- Somut göstergeler ve eşikler kullan (ör. "RSI 30'un altında ve hacim ortalamanın
+  1,5 katıyken giriş sinyalini uygula").
+- Az örneğe dayanan genellemelerden kaçın; mevcut dersleri sonuçlar destekliyorsa
+  koru, çürütüyorsa değiştir.
+- Hisse adı ya da tarih yazma.
+Yalnızca JSON yaz: {"dersler": ["...", "..."]}"""
+
+
+@dataclass
+class Coach:
+    """The model that writes lessons and revises scripts, with its key."""
+
+    api_key: str
+    model: str
+    complete: Callable[..., dict[str, Any]] = complete_chat
+    stream: Callable[..., Any] = stream_chat
+
 
 BRIEF_SYSTEM = """Bir Pine Script strateji kodunu, bu stratejinin sinyallerini tek tek
 onaylayacak hızlı bir karar modeline anlatacaksın. Yalnızca tek satır JSON yaz:
@@ -188,6 +223,7 @@ class Journal:
         self.entries: list[Entry] = []
         self.lessons: list[str] = []
         self.history: list[dict[str, Any]] = []
+        self.cost = 0.0  # what writing the lessons cost, in USD
         self._marked = 0
 
     def add(
@@ -255,3 +291,92 @@ class Journal:
         if self.lessons:
             view["dersler"] = list(self.lessons)
         return view
+
+
+# --- Lessons ------------------------------------------------------------------------
+
+
+def parse_lessons(text: str) -> list[str]:
+    """Read the lessons from ``{"dersler": [...]}`` or from a bulleted list."""
+    match = re.search(r"\{.*\}", text or "", re.S)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+        except ValueError:
+            data = None
+        if isinstance(data, dict) and isinstance(data.get("dersler"), list):
+            return [str(item) for item in data["dersler"]]
+    bullet = re.compile(r"^\s*(?:[-•*]|\d+[.)])\s+(.*\S)")
+    return [
+        m.group(1) for line in (text or "").splitlines() if (m := bullet.match(line))
+    ]
+
+
+def clean_lessons(items: list[str], codes: list[str]) -> list[str]:
+    """Keep at most ``MAX_LESSONS`` short lessons that name no stock or date."""
+    tickers = (
+        re.compile(r"\b(?:" + "|".join(re.escape(code) for code in codes) + r")\b")
+        if codes
+        else None
+    )
+    lessons = []
+    for item in items:
+        text = " ".join(str(item).split()).strip(" -•*")
+        if not text or len(text) > MAX_LESSON or _DATE.search(text):
+            continue
+        if tickers and tickers.search(text):
+            continue
+        lessons.append(text)
+        if len(lessons) == MAX_LESSONS:
+            break
+    return lessons
+
+
+def reflect(
+    journal: Journal,
+    now: Any,
+    coach: Coach,
+    *,
+    strategy: dict[str, Any] | None,
+    codes: list[str],
+) -> list[str] | None:
+    """Have the coach rewrite the lessons from the outcomes known by ``now``.
+
+    Returns None when the coach fails or writes nothing usable; the old
+    lessons then stay.
+    """
+    done = sorted(journal.known(now), key=lambda e: (e.at, e.order))[-REFLECT_ITEMS:]
+    payload = {
+        "strateji": strategy or {},
+        "mevcut_dersler": journal.lessons,
+        "kararlar": [
+            {
+                "hisse": e.letter,
+                "olay": e.event,
+                "karar": e.label,
+                "guven": e.confidence,
+                "sonuc_%": e.pct,
+                "sonuc_turu": e.kind,
+                "degerlendirme": e.verdict(),
+                "ozellikler": e.features,
+            }
+            for e in done
+        ],
+    }
+    messages = [
+        {"role": "system", "content": REFLECT_SYSTEM},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+    ]
+    try:
+        answer = coach.complete(
+            coach.api_key,
+            coach.model,
+            messages,
+            temperature=0.2,
+            max_tokens=800,
+            timeout=REFLECT_TIMEOUT,
+        )
+    except OpenRouterError:
+        return None
+    journal.cost += float((answer.get("usage") or {}).get("cost") or 0.0)
+    return clean_lessons(parse_lessons(answer["text"]), codes) or None

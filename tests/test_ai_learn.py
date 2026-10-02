@@ -26,6 +26,7 @@ from test_ai_lab import (  # noqa: F401
 from marketalyzer import blind
 from marketalyzer.ai import learn
 from marketalyzer.ai.decide import Decider, DecisionCache
+from marketalyzer.ai.openrouter import OpenRouterError
 
 # --- Strategy context --------------------------------------------------------------
 
@@ -201,6 +202,68 @@ def test_rejected_entries_learn_from_the_signal_trade():
     ]
     assert outcomes
     assert all(d["outcome_pct"] in returns for d in outcomes)
+
+
+def test_lessons_drop_tickers_dates_and_extras():
+    items = [
+        "  RSI<30 iken sinyali uygula ",
+        "THYAO'da dikkatli ol",
+        "2025-01-02 sonrası temkinli ol",
+        "x" * 400,
+        *"abcdef",
+    ]
+    assert learn.clean_lessons(items, ["THYAO"]) == [
+        "RSI<30 iken sinyali uygula",
+        "a",
+        "b",
+        "c",
+        "d",
+    ]
+    assert learn.parse_lessons('{"dersler": ["bir", "iki"]}') == ["bir", "iki"]
+    assert learn.parse_lessons("Dersler:\n- bir\n• iki\n3. üç") == ["bir", "iki", "üç"]
+
+
+def test_lessons_are_written_every_six_outcomes_and_reach_the_view():
+    model = RuleModel()
+    prompts = []
+
+    def coach_complete(api_key, model_id, messages, **kwargs):
+        prompts.append(messages)
+        return answer_text('{"dersler": ["Aşırı satımda sinyali uygula."]}')
+
+    events = []
+    # Reviews every 5 bars give enough decisions for a few reflections.
+    result = blind.run_blind(
+        config(learning="journal", review_every=5),
+        Decider("k", "m", complete=model),
+        coach=learn.Coach("k", "koç", complete=coach_complete),
+        emit=events.append,
+    )
+    assert prompts and prompts[0][0]["content"] == learn.REFLECT_SYSTEM
+    payload = json.loads(prompts[0][1]["content"])
+    assert len(payload["kararlar"]) >= learn.REFLECT_EVERY
+    for messages in prompts:
+        text = messages[1]["content"]
+        assert "THYAO" not in text and "GARAN" not in text and not DATE.search(text)
+    lessons = [e for e in events if e["type"] == "lesson"]
+    assert lessons and lessons[0]["lessons"] == ["Aşırı satımda sinyali uygula."]
+    assert any("Aşırı satımda sinyali uygula." in v for v in model.views)
+    assert result["learning"]["lessons"] == ["Aşırı satımda sinyali uygula."]
+    assert result["learning"]["history"][0]["resolved"] >= learn.REFLECT_EVERY
+    assert result["learning"]["cost_usd"] > 0
+
+
+def test_a_failing_coach_keeps_the_test_going():
+    def broken(*args, **kwargs):
+        raise OpenRouterError("koç yok", 500)
+
+    result = blind.run_blind(
+        config(learning="journal"),
+        Decider("k", "m", complete=RuleModel()),
+        coach=learn.Coach("k", "koç", complete=broken),
+    )
+    assert result["learning"]["lessons"] == []
+    assert result["ai"]["decisions"] > 0
 
 
 def test_learning_keeps_later_bars_from_changing_earlier_decisions():

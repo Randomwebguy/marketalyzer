@@ -486,14 +486,53 @@ class Learner:
     over ``learn.HORIZON`` bars, known on that bar.
     """
 
-    def __init__(self, journal: learn.Journal, signal_sims: list[Simulation]):
+    def __init__(
+        self,
+        journal: learn.Journal,
+        signal_sims: list[Simulation],
+        *,
+        coach: learn.Coach | None = None,
+        strategy: dict[str, Any] | None = None,
+        emit: Callable[[dict[str, Any]], None] = lambda event: None,
+    ):
         self.journal = journal
         self.signals = {sim.data.code: sim for sim in signal_sims}
+        self.coach = coach
+        self.strategy = strategy
+        self.emit = emit
         self._open: dict[int, learn.Entry] = {}
 
     def day(self, when: Any) -> dict[str, Any] | None:
-        """Return what the decisions on ``when`` may know."""
+        """Return what the decisions on ``when`` may know.
+
+        Once ``learn.REFLECT_EVERY`` new outcomes are known, the coach first
+        rewrites the lessons from them.
+        """
+        if self.coach and self.journal.fresh(when) >= learn.REFLECT_EVERY:
+            self.reflect(when)
         return self.journal.view(when)
+
+    def reflect(self, when: Any, **note: Any) -> None:
+        """Have the coach rewrite the lessons from what is known on ``when``."""
+        if not self.coach or not self.journal.fresh(when):
+            return
+        lessons = learn.reflect(
+            self.journal,
+            when,
+            self.coach,
+            strategy=self.strategy,
+            codes=list(self.journal.letters),
+        )
+        self.journal.mark(when)
+        if lessons:
+            resolved = len(self.journal.known(when))
+            self.journal.lessons = lessons
+            self.journal.history.append(
+                {"resolved": resolved, **note, "lessons": lessons}
+            )
+            self.emit(
+                {"type": "lesson", "lessons": lessons, "resolved": resolved, **note}
+            )
 
     def add(self, sim: Simulation, i: int, view: dict, record: dict) -> None:
         """Keep a decision just made on bar ``i`` and schedule its outcome."""
@@ -876,8 +915,13 @@ def run_blind(
     emit: Callable[[dict[str, Any]], None] = lambda event: None,
     cancelled: Callable[[], bool] = lambda: False,
     model: dict[str, Any] | None = None,
+    coach: learn.Coach | None = None,
 ) -> dict[str, Any]:
-    """Run the blind test and return the results (see ``summarize``)."""
+    """Run the blind test and return the results (see ``summarize``).
+
+    With learning on, ``coach`` writes the lessons; without one the journal
+    alone is shown to the decisions.
+    """
     config.check()
     if config.mode == "ai" and decider is None:
         raise ValueError("Yapay zeka modu için karar modeli gerekli.")
@@ -910,7 +954,13 @@ def run_blind(
         codes = [d.code for d in data]
         if config.learning != "off":
             letters = {d.code: research.letter(k) for k, d in enumerate(data)}
-            learner = Learner(learn.Journal(letters), signal_sims)
+            learner = Learner(
+                learn.Journal(letters),
+                signal_sims,
+                coach=coach,
+                strategy=strategy,
+                emit=emit,
+            )
         ai_sims = [
             Simulation(
                 d,
@@ -948,6 +998,7 @@ def _report_learning(
         "resolved": resolved,
         "lessons": list(journal.lessons),
         "history": list(journal.history),
+        "cost_usd": number(journal.cost, 4),
     }
     result["audit"]["notes"].append(
         "Karar günlüğündeki her sonuç yalnızca gerçekleştiği bardan sonraki"
