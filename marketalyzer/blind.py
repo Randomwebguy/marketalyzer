@@ -53,7 +53,10 @@ MODES = ("ai", "signals")
 # off: decide alone; journal: learn from resolved outcomes; rounds: also revise
 # the script between walk-forward windows.
 LEARNING = ("off", "journal", "rounds")
+MAX_ROUNDS = 4
 EVENTS = {"entry": "giriş", "exit": "çıkış", "review": "gözden geçirme"}
+END = "dönem sonu (açık)"  # a position still open when the test ends
+ROUND_END = "tur sonu"  # a position closed because its window ended
 _DATE = re.compile(r"\b(19|20)\d\d-\d\d-\d\d\b")
 
 
@@ -80,6 +83,7 @@ class BlindConfig:
     slippage: float = 0.001
     stop_loss_pct: float | None = None
     learning: str = "off"
+    rounds: int = 1
 
     def check(self) -> None:
         """Raise ValueError (in Turkish) for settings that cannot run."""
@@ -87,6 +91,10 @@ class BlindConfig:
             raise ValueError("Karar modu 'ai' ya da 'signals' olmalı.")
         if self.learning not in LEARNING:
             raise ValueError("Öğrenme 'off', 'journal' ya da 'rounds' olmalı.")
+        if not 1 <= self.rounds <= MAX_ROUNDS:
+            raise ValueError(f"Tur sayısı 1 ile {MAX_ROUNDS} arasında olmalı.")
+        if self.rounds > 1 and self.learning != "rounds":
+            raise ValueError("Turlar için öğrenme 'rounds' (günlük + turlar) olmalı.")
         if self.interval not in BLIND_INTERVALS:
             raise ValueError(f"Kör test zaman dilimi: {', '.join(BLIND_INTERVALS)}.")
         if self.review_every not in REVIEW_CHOICES:
@@ -197,6 +205,7 @@ class Simulation:
         strategy: dict[str, Any] | None = None,
         codes: list[str] | None = None,
         on_close: Callable[[Simulation, dict, dict], None] | None = None,
+        round_no: int = 1,
     ):
         self.data = data
         self.config = config
@@ -210,6 +219,7 @@ class Simulation:
         self.codes = codes or [data.code]
         # Called with (simulation, trade, entry decision) when a trade closes.
         self.on_close = on_close
+        self.round_no = round_no
         self.account = _Account(cash=allocation)
         self.allocation = allocation
         self.trades: list[dict[str, Any]] = []
@@ -405,6 +415,7 @@ class Simulation:
             "signals": [item["aciklama"] for item in view["aktif_sinyaller"]],
             "close": number(self.data.frame["Close"].iloc[i]),
             "data_end": stamp(self.data.frame.index[i]),
+            "round": self.round_no,
             **decision.to_dict(),
         }
         self.decisions.append(record)
@@ -462,12 +473,17 @@ class Simulation:
         if action:
             self.pending = (action, note)
 
-    def finish(self, reason: str = "dönem sonu (açık)") -> Simulation:
-        """Close a position still open at the last bar's close."""
+    def finish(self, reason: str = END) -> Simulation:
+        """Close a position still open at the last bar's close.
+
+        At the end of the test the trade is marked open; at the end of a
+        window (``ROUND_END``) it is an ordinary close.
+        """
         n = len(self.data.frame)
         if self.account.qty:
             self._sell(n - 1, self._close[n - 1], reason)
-            self.trades[-1]["open"] = True
+            if reason == END:
+                self.trades[-1]["open"] = True
         return self
 
     def run(self) -> Simulation:
@@ -590,13 +606,15 @@ def _walk(
     *,
     cancelled: Callable[[], bool] = lambda: False,
     learner: Learner | None = None,
+    reason: str = END,
 ) -> None:
     """Walk the simulations together, one date at a time.
 
     On each date every symbol trading that day steps to its close; then the
     decisions due that day are asked in parallel (each on its own cut data,
     with what the ``learner`` knows by that day) and their orders queued for
-    the next open. Signals-only simulations follow the signals.
+    the next open. Signals-only simulations follow the signals. Positions
+    still open at the end are closed with ``reason``.
     """
     for sim in sims:
         sim.begin()
@@ -614,7 +632,7 @@ def _walk(
         if pool:
             pool.shutdown()
     for sim in sims:
-        sim.finish()
+        sim.finish(reason)
 
 
 def _step_day(sims: list[Simulation], when: Any) -> list[tuple[Simulation, int, str]]:
@@ -908,6 +926,162 @@ def strategy_context(
     }
 
 
+# --- Walk-forward windows ---------------------------------------------------------
+
+
+def windows(data: list[Data], rounds: int) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """Split the test dates into ``rounds`` consecutive, nearly equal windows."""
+    dates = sorted(set().union(*(set(d.frame.index[d.first :]) for d in data)))
+    rounds = max(1, min(rounds, len(dates)))
+    bounds = [round(k * len(dates) / rounds) for k in range(rounds + 1)]
+    return [(dates[a], dates[b - 1]) for a, b in zip(bounds, bounds[1:])]
+
+
+def _window_data(
+    d: Data, start: pd.Timestamp, end: pd.Timestamp, script: Script, config: BlindConfig
+) -> Data:
+    """Cut a symbol at a window's end and run the window's script on it."""
+    frame = d.frame[d.frame.index <= end]
+    first = int(np.searchsorted(pd.DatetimeIndex(frame.index), start))
+    result = script.run(frame, config.inputs, symbol=d.code, interval=config.interval)
+    stats = research.signal_stats(
+        research.indicators(frame.iloc[:first]), d.train_first
+    )
+    return Data(
+        d.code, frame, first, d.train_first, result, {s["key"]: s for s in stats}
+    )
+
+
+@dataclass
+class _Joined:
+    """One symbol's windows put back together, for ``summarize``."""
+
+    data: Data
+    allocation: float
+    equity: list[tuple[Any, float]] = field(default_factory=list)
+    trades: list[dict[str, Any]] = field(default_factory=list)
+    decisions: list[dict[str, Any]] = field(default_factory=list)
+    exposure: int = 0
+    audit: dict[str, int] = field(
+        default_factory=lambda: dict.fromkeys(
+            ("decisions", "rechecks", "mismatches", "leaks"), 0
+        )
+    )
+
+    def add(self, sim: Simulation) -> None:
+        """Append a window's simulation."""
+        self.equity += sim.equity
+        self.trades += sim.trades
+        self.decisions += sim.decisions
+        self.exposure += sim.exposure
+        for key in self.audit:
+            self.audit[key] += sim.audit[key]
+
+
+def _window_metrics(
+    sims: list[Simulation], config: BlindConfig
+) -> dict[str, Any] | None:
+    if not sims:
+        return None
+    per_year = research.BARS_PER_YEAR.get(config.interval, 252)
+    initial = sum(sim.allocation for sim in sims)
+    trades = [t for sim in sims for t in sim.trades]
+    found = metrics(
+        _portfolio(sims, initial), trades, per_year, _exposure(sims), initial
+    )
+    keep = ("return_pct", "trades", "win_rate_pct", "avg_trade_pct")
+    return {key: found[key] for key in (*keep, "max_drawdown_pct", "exposure_pct")}
+
+
+def _move_pct(frame: pd.DataFrame, first: int) -> float | None:
+    start = float(frame["Open"].iloc[first])
+    return (float(frame["Close"].iloc[-1]) / start - 1) * 100 if start else None
+
+
+def _round_row(
+    round_no: int,
+    window: tuple[pd.Timestamp, pd.Timestamp],
+    script: Script,
+    wdata: list[Data],
+    signals: list[Simulation],
+    ai: list[Simulation] | None,
+    benchmark: pd.DataFrame | None,
+    config: BlindConfig,
+) -> dict[str, Any]:
+    """Describe one window: its dates, script and results."""
+    start, end = window
+    moves = [
+        m
+        for d in wdata
+        if d.first < len(d.frame) and (m := _move_pct(d.frame, d.first)) is not None
+    ]
+    row: dict[str, Any] = {
+        "round": round_no,
+        "start": stamp(start),
+        "end": stamp(end),
+        "bars": max(d.test_bars for d in wdata),
+        "script": script.name or "editör",
+        "ai": _window_metrics(ai or [], config),
+        "signals": _window_metrics(signals, config),
+        "hold_return_pct": number(sum(moves) / len(moves), 2) if moves else None,
+        "benchmark_return_pct": None,
+        "symbols": [],
+        "revision": None,
+    }
+    if benchmark is not None and not benchmark.empty:
+        index = benchmark["Close"][
+            (benchmark.index >= start) & (benchmark.index <= end)
+        ]
+        if len(index) > 1:
+            row["benchmark_return_pct"] = number(
+                (index.iloc[-1] / index.iloc[0] - 1) * 100, 2
+            )
+
+    def change(sim: Simulation) -> float | None:
+        if not sim.equity or not sim.allocation:
+            return None
+        return number((sim.equity[-1][1] / sim.allocation - 1) * 100, 2)
+
+    for k, d in enumerate(wdata):
+        item = {
+            "symbol": d.code,
+            "signals_trades": len(signals[k].trades),
+            "signals_return_pct": change(signals[k]),
+            "hold_return_pct": number(_move_pct(d.frame, d.first), 2)
+            if d.first < len(d.frame)
+            else None,
+        }
+        if ai:
+            item["ai_trades"] = len(ai[k].trades)
+            item["ai_return_pct"] = change(ai[k])
+        row["symbols"].append(item)
+    return row
+
+
+def _round_report(
+    row: dict[str, Any], letters: dict[str, str], learner: Learner | None, end: Any
+) -> dict[str, Any]:
+    """Return a window's results for the script author: letters, no dates."""
+    report = {
+        key: row[key]
+        for key in ("round", "bars", "ai", "signals", "hold_return_pct")
+        if row.get(key) is not None
+    }
+    report["benchmark_return_pct"] = row.get("benchmark_return_pct")
+    report["symbols"] = [
+        {
+            **{k: v for k, v in item.items() if k != "symbol"},
+            "hisse": letters[item["symbol"]],
+        }
+        for item in row["symbols"]
+    ]
+    if learner:
+        journal = learner.journal.view(end) or {}
+        report["karar_gunlugu"] = journal.get("ozet")
+        report["dersler"] = list(learner.journal.lessons)
+    return report
+
+
 def run_blind(
     config: BlindConfig,
     decider: Decider | None = None,
@@ -916,11 +1090,16 @@ def run_blind(
     cancelled: Callable[[], bool] = lambda: False,
     model: dict[str, Any] | None = None,
     coach: learn.Coach | None = None,
+    revise: Callable[..., tuple[Script, dict[str, Any]] | None] | None = None,
 ) -> dict[str, Any]:
     """Run the blind test and return the results (see ``summarize``).
 
     With learning on, ``coach`` writes the lessons; without one the journal
-    alone is shown to the decisions.
+    alone is shown to the decisions. With ``config.rounds`` above 1 the test
+    runs window by window; after each window but the last,
+    ``revise(round_no, script, report, cutoff)`` may return a new script (and
+    a note about it), which trades from the next window on. It sees the
+    window's report and data up to ``cutoff``, the window's last day.
     """
     config.check()
     if config.mode == "ai" and decider is None:
@@ -929,62 +1108,160 @@ def run_blind(
     emit({"type": "stage", "stage": "loading", "message": "Veriler yükleniyor"})
     data, benchmark = load(config, script)
     allocation = config.cash / len(data)
-    signal_sims = [
-        Simulation(d, config, allocation, benchmark, script=script).run() for d in data
-    ]
-    ai_sims = None
-    strategy = None
-    learner = None
+    parts = windows(data, config.rounds)
+    walk = _Rounds(config, data, benchmark, decider, emit, cancelled)
     if config.mode == "ai":
         plan = estimate(config, data)
         emit({"type": "plan", **plan})
-        emit({"type": "stage", "stage": "strategy", "message": "Strateji özetleniyor"})
-        strategy = strategy_context(script, data, config, decider)
-        emit({"type": "strategy", **strategy})
-        emit({"type": "stage", "stage": "deciding", "message": "Model karar veriyor"})
-
-        def on_decision(record: dict[str, Any]) -> None:
-            emit(
-                {
-                    "type": "decision",
-                    "decision": {k: v for k, v in record.items() if k != "bar"},
-                }
-            )
-
-        codes = [d.code for d in data]
         if config.learning != "off":
             letters = {d.code: research.letter(k) for k, d in enumerate(data)}
-            learner = Learner(
-                learn.Journal(letters),
-                signal_sims,
-                coach=coach,
-                strategy=strategy,
-                emit=emit,
+            walk.learner = Learner(learn.Journal(letters), [], coach=coach, emit=emit)
+    rows = walk.run(script, parts, allocation, revise)
+    emit({"type": "stage", "stage": "summary", "message": "Sonuçlar hesaplanıyor"})
+    signal_sims = list(walk.signals.values())
+    ai_sims = list(walk.ai.values()) if config.mode == "ai" else None
+    result = summarize(config, data, benchmark, signal_sims, ai_sims, model)
+    if walk.strategy:
+        result["ai"]["strategy"] = walk.strategy
+    if len(parts) > 1:
+        result["rounds"] = rows
+        first = [Simulation(d, config, allocation, script=script).run() for d in data]
+        result["initial_signals"] = _window_metrics(first, config)
+    if len(parts) > 1 and "audit" in result:
+        result["audit"]["notes"].append(
+            "Script revizyonları yalnızca pencere sonuna kadarki veriyi gördü ve"
+            " yalnızca sonraki pencerede kullanıldı; pencere sonunda açık"
+            " pozisyonlar kapatıldı."
+        )
+    if walk.learner:
+        _report_learning(result, config, walk.learner.journal)
+    return result
+
+
+class _Rounds:
+    """Run the windows of a blind test, carrying cash, journal and script."""
+
+    def __init__(self, config, data, benchmark, decider, emit, cancelled):
+        self.config = config
+        self.data = data
+        self.benchmark = benchmark
+        self.decider = decider
+        self.emit = emit
+        self.cancelled = cancelled
+        self.learner: Learner | None = None
+        self.strategy: dict[str, Any] | None = None
+        self.signals = {d.code: _Joined(d, config.cash / len(data)) for d in data}
+        self.ai = {d.code: _Joined(d, config.cash / len(data)) for d in data}
+
+    def _on_decision(self, record: dict[str, Any]) -> None:
+        self.emit(
+            {
+                "type": "decision",
+                "decision": {k: v for k, v in record.items() if k != "bar"},
+            }
+        )
+
+    def run(self, script, parts, allocation, revise) -> list[dict[str, Any]]:
+        """Walk every window; return a row per window."""
+        config, codes = self.config, [d.code for d in self.data]
+        cash = {"signals": dict.fromkeys(codes, allocation)}
+        cash["ai"] = dict(cash["signals"])
+        letters = {d.code: research.letter(k) for k, d in enumerate(self.data)}
+        rows = []
+        for k, window in enumerate(parts, 1):
+            last = k == len(parts)
+            if len(parts) > 1:
+                self.emit({"type": "round", "round": k, "rounds": len(parts),
+                           "start": stamp(window[0]), "end": stamp(window[1]),
+                           "script": script.name or "editör"})  # fmt: skip
+                wdata = [_window_data(d, *window, script, config) for d in self.data]
+            else:
+                wdata = self.data
+            reason = END if last else ROUND_END
+            signals = [
+                Simulation(
+                    w,
+                    config,
+                    cash["signals"][w.code],
+                    self.benchmark,
+                    script=script,
+                    round_no=k,
+                )  # fmt: skip
+                for w in wdata
+            ]
+            _walk(signals, cancelled=self.cancelled, reason=reason)
+            ai = self._ai_window(script, wdata, cash["ai"], k, signals, reason)
+            for name, sims in (("signals", signals), ("ai", ai or [])):
+                for sim in sims:
+                    if (
+                        sim.equity
+                    ):  # A symbol without bars in the window keeps its cash.
+                        cash[name][sim.data.code] = sim.equity[-1][1]
+                    getattr(self, name)[sim.data.code].add(sim)
+            if len(parts) == 1:
+                return rows
+            row = _round_row(
+                k, window, script, wdata, signals, ai, self.benchmark, config
             )
-        ai_sims = [
+            if not last:
+                script = self._revise(script, row, letters, window[1], revise)
+            rows.append(row)
+            self.emit({"type": "round_end", "row": row})
+        return rows
+
+    def _ai_window(self, script, wdata, cash, k, signals, reason):
+        if self.config.mode != "ai":
+            return None
+        self.emit(
+            {"type": "stage", "stage": "strategy", "message": "Strateji özetleniyor"}
+        )
+        self.strategy = strategy_context(script, wdata, self.config, self.decider)
+        self.emit({"type": "strategy", **self.strategy})
+        self.emit(
+            {"type": "stage", "stage": "deciding", "message": "Model karar veriyor"}
+        )
+        learner = self.learner
+        if learner:
+            learner.signals = {sim.data.code: sim for sim in signals}
+            learner.strategy = self.strategy
+        codes = [d.code for d in self.data]
+        ai = [
             Simulation(
-                d,
-                config,
-                allocation,
-                benchmark,
-                decide=decider.decide,
-                on_decision=on_decision,
-                cancelled=cancelled,
+                w,
+                self.config,
+                cash[w.code],
+                self.benchmark,
+                decide=self.decider.decide,
+                on_decision=self._on_decision,
+                cancelled=self.cancelled,
                 script=script,
-                strategy=strategy,
+                strategy=self.strategy,
                 codes=codes,
                 on_close=learner.closed if learner else None,
+                round_no=k,
             )
-            for d in data
+            for w in wdata
         ]
-        _walk(ai_sims, cancelled=cancelled, learner=learner)
-    emit({"type": "stage", "stage": "summary", "message": "Sonuçlar hesaplanıyor"})
-    result = summarize(config, data, benchmark, signal_sims, ai_sims, model)
-    if strategy:
-        result["ai"]["strategy"] = strategy
-    if learner:
-        _report_learning(result, config, learner.journal)
-    return result
+        _walk(ai, cancelled=self.cancelled, learner=learner, reason=reason)
+        return ai
+
+    def _revise(self, script, row, letters, end, revise):
+        if self.learner:
+            self.learner.reflect(end, round=row["round"])
+        if revise is None:
+            return script
+        self.emit(
+            {"type": "stage", "stage": "revising", "message": "Script geliştiriliyor"}
+        )
+        report = _round_report(row, letters, self.learner, end)
+        revised = revise(row["round"], script, report, end.date())
+        if revised is None:
+            row["revision"] = {"ok": False, "name": script.name or "editör"}
+        else:
+            script, info = revised
+            row["revision"] = {"ok": True, **info, "name": script.name or "editör"}
+        self.emit({"type": "revision", "round": row["round"], **row["revision"]})
+        return script
 
 
 def _report_learning(
@@ -1028,6 +1305,8 @@ def config_from(body: dict[str, Any]) -> BlindConfig:
         costs=costs,
         slippage=float(body.get("slippage", 0.001)),
         stop_loss_pct=body.get("stop_loss_pct") or None,
+        learning=body.get("learning") or "off",
+        rounds=int(body.get("rounds") or 1),
     )
 
 

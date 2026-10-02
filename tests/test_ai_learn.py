@@ -6,7 +6,7 @@ models are replaced by small rule-based fakes.
 """
 
 import json
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pandas as pd
 import pytest
@@ -28,7 +28,7 @@ from test_ai_lab import (  # noqa: F401
     synthetic,
 )
 
-from marketalyzer import blind
+from marketalyzer import blind, services
 from marketalyzer.ai import decide, learn, runs
 from marketalyzer.ai.decide import Decider, DecisionCache
 from marketalyzer.ai.openrouter import OpenRouterError
@@ -339,6 +339,91 @@ def test_web_saves_ai_runs_and_live_decisions_use_their_lessons(monkeypatch):
         ).json()
         assert live["lessons"] == ["Aşırı satımda sinyali uygula."]
         assert "Aşırı satımda sinyali uygula." in model.views[-1]
+
+
+# --- Walk-forward windows ----------------------------------------------------------
+
+FASTER = STRATEGY.replace('fast = input.int(10, "Hızlı"', 'fast = input.int(5, "Hızlı"')
+
+
+def test_windows_split_the_test_dates_evenly():
+    cfg = config()
+    data, _ = blind.load(cfg, services._script(None, cfg.source))
+    parts = blind.windows(data, 3)
+    dates = sorted(set().union(*(set(d.frame.index[d.first :]) for d in data)))
+    assert len(parts) == 3
+    assert parts[0][0] == dates[0] and parts[-1][1] == dates[-1]
+    assert all(a[1] < b[0] for a, b in zip(parts, parts[1:]))
+    sizes = [sum(start <= t <= end for t in dates) for start, end in parts]
+    assert max(sizes) - min(sizes) <= 1
+    assert blind.windows(data, 1) == [(dates[0], dates[-1])]
+
+
+def test_rounds_need_round_learning():
+    with pytest.raises(ValueError, match="Tur"):
+        config(rounds=2).check()
+    with pytest.raises(ValueError, match="Tur"):
+        config(learning="rounds", rounds=5).check()
+
+
+def test_one_round_matches_the_plain_run():
+    plain = blind.run_blind(config(mode="signals"))
+    one = blind.run_blind(config(mode="signals", learning="rounds", rounds=1))
+    assert one["signals"] == plain["signals"]
+    assert one["signal_trades"] == plain["signal_trades"]
+    assert "rounds" not in one
+
+
+def test_rounds_close_at_window_end_and_compound():
+    result = blind.run_blind(config(mode="signals", learning="rounds", rounds=3))
+    rows = result["rounds"]
+    assert [row["round"] for row in rows] == [1, 2, 3]
+    assert rows[0]["end"] < rows[1]["start"] and rows[1]["end"] < rows[2]["start"]
+    reasons = [t["exit_reason"] for t in result["signal_trades"]]
+    assert "tur sonu" in reasons
+    still_open = [t for t in result["signal_trades"] if t.get("open")]
+    assert len(still_open) <= 2
+    assert all(t["exit_reason"] == "dönem sonu (açık)" for t in still_open)
+    # Each window starts from the cash the previous one ended with.
+    equity = [p["v"] for p in result["signals"]["equity"]]
+    assert equity[0] > 0 and result["signals"]["equity_final"] == pytest.approx(
+        equity[-1], abs=0.01
+    )
+    assert result["initial_signals"]["trades"] > 0
+
+
+def test_revision_trades_only_the_next_window():
+    seen = []
+
+    def revise(round_no, script, report, cutoff):
+        seen.append((round_no, cutoff, report["round"], script.name))
+        new = services._script(None, FASTER)
+        new.name = "ai_x_t2"
+        return new, {"ok": True, "name": "ai_x_t2", "explanation": "- daha hızlı"}
+
+    result = blind.run_blind(
+        config(learning="rounds", rounds=2),
+        Decider("k", "m", complete=RuleModel()),
+        revise=revise,
+    )
+    rows = result["rounds"]
+    assert seen == [(1, date.fromisoformat(rows[0]["end"][:10]), 1, rows[0]["script"])]
+    assert rows[1]["script"] == "ai_x_t2"
+    assert rows[0]["revision"]["name"] == "ai_x_t2"
+    for decision in result["decisions"]:
+        window = rows[decision["round"] - 1]
+        assert window["start"] <= decision["time"] <= window["end"]
+
+
+def test_failed_revision_keeps_the_script():
+    result = blind.run_blind(
+        config(learning="rounds", rounds=2),
+        Decider("k", "m", complete=RuleModel()),
+        revise=lambda *args: None,
+    )
+    rows = result["rounds"]
+    assert rows[1]["script"] == rows[0]["script"]
+    assert rows[0]["revision"]["ok"] is False
 
 
 def test_learning_keeps_later_bars_from_changing_earlier_decisions():
