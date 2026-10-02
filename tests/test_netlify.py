@@ -197,6 +197,8 @@ def test_no_cors_by_default(monkeypatch):
 
 def test_token_from_the_netlify_cli(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    # Path.home() reads USERPROFILE, not HOME, on Windows.
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.delenv("APPDATA", raising=False)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.delenv("NETLIFY_AUTH_TOKEN", raising=False)
