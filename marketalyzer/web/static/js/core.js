@@ -132,17 +132,167 @@ export class ApiError extends Error {
   }
 }
 
+// The interface can be served by another site (a fixed Netlify address) while the
+// server runs elsewhere behind a tunnel whose address changes. That site's
+// index.html carries <meta name="marketalyzer-backend">; /backend.json then names
+// the server, and requests carry the access token kept in this browser.
+const TOKEN_KEY = "marketalyzer.token";
+const OFFLINE = "Sunucuya ulaşılamıyor. Bilgisayarınızda marketalyzer ve tünelin açık olduğundan emin olun.";
+
+async function readBackend() {
+  try {
+    const response = await fetch("/backend.json", { cache: "no-store" });
+    const config = response.ok ? await response.json() : null;
+    return config?.api ? String(config.api).replace(/\/+$/, "") : null;
+  } catch {
+    return null;
+  }
+}
+
+function takeUrlToken() {
+  const url = new URL(location.href);
+  const token = url.searchParams.get("token");
+  if (!token) return;
+  try {
+    localStorage.setItem(TOKEN_KEY, token);
+  } catch {
+    // Private mode: the token lives only in this page.
+  }
+  sessionToken = token;
+  url.searchParams.delete("token");
+  history.replaceState(null, "", url.pathname + url.search + url.hash);
+}
+
+let sessionToken = "";
+export const remote = document.querySelector('meta[name="marketalyzer-backend"]')
+  ? { api: null, ready: null }
+  : null;
+if (remote) {
+  takeUrlToken();
+  remote.ready = readBackend().then((api) => {
+    remote.api = api;
+    return api;
+  });
+}
+
+function storedToken() {
+  try {
+    return localStorage.getItem(TOKEN_KEY) || sessionToken;
+  } catch {
+    return sessionToken;
+  }
+}
+
+/** Ask for the access token on a remotely served interface, then reload. */
+export function showLogin(message = "") {
+  if (document.getElementById("remote-login")) return;
+  const box = document.createElement("div");
+  box.id = "remote-login";
+  box.className = "remote-login";
+  box.innerHTML = `<form class="card">
+      <h2>marketalyzer</h2>
+      <p class="muted small">Sunucunun yazdırdığı adresteki <code>?token=</code> değerini girin. Bu tarayıcı onu hatırlar.</p>
+      ${message ? `<p class="error small">${esc(message)}</p>` : ""}
+      <label class="field">Erişim anahtarı<input name="token" type="password" autocomplete="current-password" required></label>
+      <button class="btn primary block" type="submit">Giriş</button>
+    </form>`;
+  box.querySelector("form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const token = event.target.elements.token.value.trim();
+    try {
+      localStorage.setItem(TOKEN_KEY, token);
+    } catch {
+      sessionToken = token;
+    }
+    location.reload();
+  });
+  document.body.appendChild(box);
+  box.querySelector("input").focus();
+}
+
+/** Sign out: forget the token (remote) or drop the cookie (same server). */
+export function logout() {
+  if (!remote) {
+    location.href = "/logout";
+    return;
+  }
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // Nothing stored.
+  }
+  sessionToken = "";
+  showLogin();
+}
+
+/** A server address for links opened outside fetch, such as report pages. */
+export function apiLink(path) {
+  if (!remote?.api) return path;
+  const separator = path.includes("?") ? "&" : "?";
+  return `${remote.api}${path}${separator}token=${encodeURIComponent(storedToken())}`;
+}
+
+async function send(path, options) {
+  if (!remote) {
+    try {
+      return await fetch(path, { ...options, credentials: "same-origin" });
+    } catch (error) {
+      if (error.name === "AbortError") throw error;
+      throw new ApiError(OFFLINE, 0);
+    }
+  }
+  if (!storedToken()) {
+    showLogin();
+    throw new ApiError("Erişim anahtarı gerekli.", 401);
+  }
+  await remote.ready;
+  const request = () => fetch(`${remote.api}${path}`, {
+    ...options,
+    credentials: "omit",
+    headers: { ...(options.headers ?? {}), Authorization: `Bearer ${storedToken()}` },
+  });
+  try {
+    if (!remote.api) throw new TypeError("no server");
+    return await request();
+  } catch (error) {
+    if (error.name === "AbortError") throw error;
+    // The tunnel may have restarted under a new address: read it again once.
+    const api = await readBackend();
+    if (api && api !== remote.api) {
+      remote.api = api;
+      try {
+        return await request();
+      } catch (retry) {
+        if (retry.name === "AbortError") throw retry;
+      }
+    }
+    throw new ApiError(OFFLINE, 0);
+  }
+}
+
+function unauthorized() {
+  if (remote) {
+    try {
+      localStorage.removeItem(TOKEN_KEY);
+    } catch {
+      // Nothing stored.
+    }
+    sessionToken = "";
+    showLogin("Anahtar geçersiz ya da değişmiş.");
+  } else {
+    location.href = "/";
+  }
+  return new ApiError("Oturum gerekli.", 401);
+}
+
 export async function api(path, body, method) {
-  const options = { credentials: "same-origin", method: method || (body === undefined ? "GET" : "POST") };
+  const options = { method: method || (body === undefined ? "GET" : "POST") };
   if (body !== undefined) {
     options.headers = { "Content-Type": "application/json" };
     options.body = JSON.stringify(body);
   }
-  const response = await fetch(path, options);
-  if (response.status === 401) {
-    location.href = "/";
-    throw new ApiError("Oturum gerekli.", 401);
-  }
+  const response = await send(path, options);
+  if (response.status === 401) throw unauthorized();
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new ApiError(errorText(data, response.status), response.status, data.detail);
   return data;
@@ -150,13 +300,13 @@ export async function api(path, body, method) {
 
 /** POST and read a server-sent event stream, calling onEvent for each event. */
 export async function stream(path, body, onEvent, signal) {
-  const response = await fetch(path, {
+  const response = await send(path, {
     method: "POST",
-    credentials: "same-origin",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
     body: JSON.stringify(body),
     signal,
   });
+  if (response.status === 401) throw unauthorized();
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
     throw new ApiError(errorText(data, response.status), response.status, data.detail);

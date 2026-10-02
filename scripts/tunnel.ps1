@@ -1,5 +1,11 @@
 ﻿# Start the marketalyzer web interface and publish it through Cloudflare (Windows).
 #
+# Fixed address without a domain (the interface on Netlify, the server here):
+#   marketalyzer-netlify setup --token <Netlify personal access token>   # once
+#   powershell -ExecutionPolicy Bypass -File scripts\tunnel.ps1
+# Every start then opens a quick tunnel, writes its new address to the Netlify
+# site and prints https://marketalyzer.netlify.app/?token=..., which stays the same.
+#
 # Fixed address (needs a free Cloudflare account and a domain on Cloudflare):
 #   cloudflared tunnel login        # once: pick the domain in the browser
 #   powershell -ExecutionPolicy Bypass -File scripts\tunnel.ps1 -Hostname bist.alanadiniz.com
@@ -59,6 +65,13 @@ if ($Quick) { $mode = "quick" }
 elseif ($env:CLOUDFLARE_TUNNEL_TOKEN) { $mode = "token" }
 elseif ($Hostname) { $mode = "named" }
 else { $mode = "quick" }
+
+# With a Netlify site, the quick tunnel's address is published there on every start.
+$netlify = $null
+if ($mode -eq "quick" -and (Get-Command marketalyzer-netlify -ErrorAction SilentlyContinue)) {
+    $site = & marketalyzer-netlify url
+    if ($LASTEXITCODE -eq 0 -and $site) { $netlify = ($site | Select-Object -Last 1).Trim() }
+}
 
 $cloudflaredArgs = @()
 if ($mode -eq "named") {
@@ -128,10 +141,22 @@ try {
         Write-Host $line
         if ($script:shown) { return }
         if ($mode -eq "quick" -and $line -match "(https://[a-z0-9-]+\.trycloudflare\.com)") {
-            Show-Address $Matches[1]
-            Write-Host ">>> Bu adres her başlatmada değişir. Sabit adres için: scripts\tunnel.ps1 -Hostname bist.alanadiniz.com"
-            Write-Host ""
+            $tunnelUrl = $Matches[1]
             $script:shown = $true
+            if ($netlify) {
+                Write-Host "Netlify'a yeni tünel adresi yazılıyor…"
+                & marketalyzer-netlify deploy --backend $tunnelUrl | ForEach-Object { Write-Host $_ }
+                if ($LASTEXITCODE -eq 0) {
+                    Show-Address $netlify
+                    Write-Host ">>> Bu adres hiç değişmez; telefona uygulama olarak kurabilirsiniz."
+                    Write-Host ""
+                    return
+                }
+                Write-Host "Netlify güncellenemedi; geçici adres kullanılıyor."
+            }
+            Show-Address $tunnelUrl
+            Write-Host ">>> Bu adres her başlatmada değişir. Sabit adres için: marketalyzer-netlify setup --token <anahtar>"
+            Write-Host ""
         } elseif ($mode -ne "quick" -and $line -match "Registered tunnel connection") {
             if ($Hostname) { Show-Address "https://$Hostname" }
             else { Write-Host ">>> Tünel bağlandı. Adres: panelde tanımladığınız alan adı + /?token=$token" }

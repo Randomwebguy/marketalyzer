@@ -18,6 +18,7 @@ from typing import Any, Literal
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -274,9 +275,17 @@ def _sse(event: dict[str, Any]) -> str:
 
 
 def create_app(
-    token: str | None = None, account_name: str = "web", demo: bool = False
+    token: str | None = None,
+    account_name: str = "web",
+    demo: bool = False,
+    cors_origins: list[str] | None = None,
 ) -> FastAPI:
-    """Build the app. ``account_name`` names the paper account it manages."""
+    """Build the app. ``account_name`` names the paper account it manages.
+
+    ``cors_origins`` lists the sites allowed to call the API from a browser,
+    such as the Netlify site serving the interface (default: none, or the
+    comma-separated ``MARKETALYZER_CORS_ORIGINS``).
+    """
     import backtesting
 
     # Requests run in server threads, and backtesting.py optimizes in processes
@@ -330,6 +339,20 @@ def create_app(
             return FileResponse(STATIC / "login.html", status_code=401)
         return JSONResponse(
             {"detail": "Erişim anahtarı gerekli: önce giriş yapın."}, status_code=401
+        )
+
+    if cors_origins is None:
+        configured = os.environ.get("MARKETALYZER_CORS_ORIGINS", "")
+        cors_origins = [o.strip() for o in configured.split(",") if o.strip()]
+    if cors_origins:
+        # Added after the token check, so it runs first: preflight requests carry
+        # no token, and refused requests still get the CORS headers.
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=[origin.rstrip("/") for origin in cors_origins],
+            allow_methods=["GET", "POST", "PUT", "DELETE"],
+            allow_headers=["Authorization", "Content-Type", "Accept"],
+            max_age=600,
         )
 
     @app.exception_handler(OrderRejected)

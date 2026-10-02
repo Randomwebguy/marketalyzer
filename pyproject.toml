@@ -17,6 +17,7 @@ dependencies = [
 marketalyzer-backtest = "marketalyzer.backtest.cli:main"
 marketalyzer-paper = "marketalyzer.paper.cli:main"
 marketalyzer-web = "marketalyzer.web.cli:main"
+marketalyzer-netlify = "marketalyzer.web.netlify:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6", "httpx2>=2.13"]
@@ -50,6 +51,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "D"]
 "marketalyzer/*/cli.py" = ["T20"]
+"marketalyzer/web/netlify.py" = ["T20"]
 # The parser and interpreter dispatch on node types in long if-chains.
 "marketalyzer/scripting/{parser,runtime}.py" = ["PLR0911", "PLR0912"]
 "**/__init__.py" = ["F401"]

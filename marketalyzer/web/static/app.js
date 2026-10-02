@@ -1,7 +1,7 @@
 // marketalyzer web app shell: routing, sidebar, tab bar, command palette.
 import {
-  $, $$, api, arcGauge, emit, esc, fmtNumber, go, icon, initials, loadFx, loadPaper, money, on, session, sheet,
-  state, store, symbolColor, toast,
+  $, $$, api, arcGauge, emit, esc, fmtNumber, go, icon, initials, loadFx, loadPaper, logout, money, on, remote,
+  session, sheet, state, store, symbolColor, toast,
 } from "/static/js/core.js";
 
 const page = (name) => () => import(`/static/js/pages/${name}.js`);
@@ -343,6 +343,14 @@ async function start() {
   await Promise.all([loadPaper(), loadFx()]);
   render();
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+  // On a remotely served interface "Çıkış" forgets the token kept in this browser.
+  if (remote) {
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest('a[href="/logout"]')) return;
+      event.preventDefault();
+      logout();
+    });
+  }
 }
 
 window.addEventListener("beforeinstallprompt", (event) => {

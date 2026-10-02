@@ -266,7 +266,15 @@ scripts/tunnel.sh --quick --demo # her seferinde değişen geçici adres; ek arg
 
 Uygulama bir erişim anahtarıyla açılır. Anahtar ilk açılışta üretilir ve `~/.local/share/marketalyzer/web/token` dosyasında (izin 600) saklanır; sonraki açılışlarda aynısı kullanılır, böylece adres, tarayıcı oturumu ve telefona kurulan uygulama yeniden başlatmalarda bozulmaz. Adresteki `?token=...` bir kez kullanıldığında ya da giriş sayfasına anahtar yazıldığında tarayıcı onu 30 gün hatırlar; **Çıkış** bağlantısı çerezi siler. Anahtar sızarsa `marketalyzer-web --new-token` ile yenileyin. `MARKETALYZER_TOKEN` ortam değişkeni verilirse dosyanın yerine o kullanılır.
 
-**Sabit tünel adresi.** Hızlı tünel (`--quick`, alan adı yokken varsayılan) her başlatmada yeni bir `https://<rastgele>.trycloudflare.com` adresi verir. Her zaman aynı adres için ücretsiz bir Cloudflare hesabı ve Cloudflare'e bağlı bir alan adı gerekir (alan adının ad sunucuları Cloudflare olmalı; Cloudflare Registrar'dan da alınabilir):
+**Alan adı olmadan sabit adres: Netlify.** Arayüz `https://marketalyzer.netlify.app` adresinde Netlify'da durur, sunucu bu bilgisayarda tünelle çalışmaya devam eder. Her başlatmada betik hızlı tünelin yeni adresini Netlify'daki `backend.json` dosyasına yazar (yaklaşık 250 KB'lık bir yükleme); arayüz sunucuyu oradan bulur ve istekleri erişim anahtarıyla doğrudan tünele gönderir. Adres hiç değişmez; anahtar tarayıcıda bu adrese bağlı saklanır, telefona kurulan uygulama da aynı adreste kalır. Sunucu yalnızca bu siteden gelen tarayıcı isteklerine izin verir (CORS).
+
+1. [app.netlify.com](https://app.netlify.com) hesabı açın; **User settings → Applications → Personal access tokens** bölümünden bir anahtar oluşturun.
+2. Bir kez: `marketalyzer-netlify setup --token <anahtar>` — `marketalyzer` adlı siteyi oluşturur (ad başka hesapta kullanılıyorsa `--name` ile başka bir ad verin). Anahtar ve site bilgisi `~/.local/share/marketalyzer/netlify.json` dosyasında (izin 600) saklanır.
+3. Her seferinde: `scripts/tunnel.sh` ya da `scripts\tunnel.ps1`. Bağlantı kurulunca `https://marketalyzer.netlify.app/?token=...` yazdırılır; ilk açılıştan sonra `?token=` olmadan da açılır.
+
+Netlify yalnızca statik arayüzü barındırır: backtest, yapay zeka ve sanal hesap bilgisayarınızda çalışır. Bilgisayar ya da tünel kapalıyken site açılır ama "Sunucuya ulaşılamıyor" uyarısı verir. Netlify'ı bırakmak için `marketalyzer-netlify forget`.
+
+**Kendi alan adınızla sabit tünel adresi.** Hızlı tünel (`--quick`, alan adı yokken varsayılan) her başlatmada yeni bir `https://<rastgele>.trycloudflare.com` adresi verir. Her zaman aynı adres için ücretsiz bir Cloudflare hesabı ve Cloudflare'e bağlı bir alan adı gerekir (alan adının ad sunucuları Cloudflare olmalı; Cloudflare Registrar'dan da alınabilir):
 
 1. Bir kez giriş yapın: `cloudflared tunnel login` (tarayıcıda alan adınızı seçin).
 2. İlk çalıştırmada adresi verin: `scripts/tunnel.sh --hostname bist.alanadiniz.com` (Windows: `scripts\tunnel.ps1 -Hostname bist.alanadiniz.com`). Betik `marketalyzer` adlı tüneli ve DNS kaydını oluşturur, adresi `~/.local/share/marketalyzer/tunnel.*` dosyasında hatırlar.
@@ -285,10 +293,11 @@ Tüneli Cloudflare panelinden (Zero Trust → Networks → Tunnels, genel ad →
 uv sync
 .venv\Scripts\Activate.ps1
 $env:OPENROUTER_API_KEY = "sk-or-..."      # isteğe bağlı; Ayarlar'dan da girilebilir
-cloudflared tunnel login                   # sabit adres için bir kez
-powershell -ExecutionPolicy Bypass -File scripts\tunnel.ps1 -Hostname bist.alanadiniz.com
-powershell -ExecutionPolicy Bypass -File scripts\tunnel.ps1          # sonraki seferler; -Quick: geçici adres
+marketalyzer-netlify setup --token <Netlify anahtarı>   # alan adı yoksa, bir kez: https://marketalyzer.netlify.app
+powershell -ExecutionPolicy Bypass -File scripts\tunnel.ps1          # her seferinde
 ```
+
+Kendi alan adınız varsa Netlify yerine: `cloudflared tunnel login` (bir kez), sonra `scripts\tunnel.ps1 -Hostname bist.alanadiniz.com`.
 
 Betikler için [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) kurulu olmalıdır. Bağlantı kurulunca anahtarla birlikte tam adres yazdırılır. Adresi bilen herkes uygulamaya erişebileceği için paylaşmayın. Tünel, betik çalıştığı sürece açık kalır.
 

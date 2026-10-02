@@ -774,6 +774,13 @@ body.demo .assistant { height: calc(100dvh - 200px); }
 .login .muted { margin-top: 16px; }
 
 /* ---------------------------------------------------------------- responsive */
+/* ---------------------------------------------------------------- remote login */
+.remote-login { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 16px;
+                background: rgba(4, 4, 4, 0.92); backdrop-filter: blur(6px); }
+.remote-login form { width: min(400px, 100%); display: grid; gap: 12px; }
+.remote-login h2 { margin: 0; font-size: 20px; }
+.remote-login p { margin: 0; }
+
 /* ---------------------------------------------------------------- AI strategy lab */
 .strategy-side { position: sticky; top: 16px; align-self: start; }
 .symbol-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border-radius: var(--radius-md);

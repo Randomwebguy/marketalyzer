@@ -99,7 +99,15 @@ def main(argv: list[str] | None = None) -> int:
             prefix="marketalyzer-demo-"
         )
     account = args.account or ("demo" if args.demo else "web")
-    app = create_app(token, account, demo=args.demo)
+    origins = None
+    if not os.environ.get("MARKETALYZER_CORS_ORIGINS"):
+        from marketalyzer.web.netlify import site_origin
+
+        site = site_origin()
+        origins = [site] if site else None
+    app = create_app(token, account, demo=args.demo, cors_origins=origins)
     print(f"Arayüz: http://{args.host}:{args.port}/?token={token}", flush=True)
+    if origins:
+        print(f"Netlify arayüzü: {origins[0]}/?token={token}", flush=True)
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return 0

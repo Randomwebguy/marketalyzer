@@ -1,6 +1,6 @@
 // Backtest and walk-forward result views, shared by the Lab and their pages.
 import {
-  $, esc, fmtDate, fmtMoney, fmtNumber, icon, lineChart, mount, pctText, pill, responsive, signedMoney,
+  $, apiLink, esc, fmtDate, fmtMoney, fmtNumber, icon, lineChart, mount, pctText, pill, responsive, signedMoney,
   tipTime, token, tone,
 } from "/static/js/core.js";
 
@@ -63,7 +63,7 @@ export function showBacktest(container, r, { onApply } = {}) {
     <section class="card">
       <div class="card-head"><h2>${esc(main.symbol || "")} · ${esc(main.strategy || r.strategy || "")}</h2>
         <span class="sub">${esc(fmtDate(main.start))} – ${esc(fmtDate(main.end))}</span><span class="spacer"></span>
-        ${r.plot ? `<a class="btn small" href="${esc(r.plot)}" target="_blank" rel="noopener">${icon("external", "sm")} Ayrıntılı grafik</a>` : ""}</div>
+        ${r.plot ? `<a class="btn small" href="${esc(apiLink(r.plot))}" target="_blank" rel="noopener">${icon("external", "sm")} Ayrıntılı grafik</a>` : ""}</div>
       <div class="row-flex" style="margin-bottom:12px">${paramChips(params)}
         ${optimized ? `<span class="chip tag sky">${r.out_of_sample ? "Sonuçlar: test dönemi (görülmemiş veri)" : "Sonuçlar: eğitim dönemi"}</span>` : ""}
         ${optimized && onApply ? '<button class="btn small" type="button" data-apply>Parametreleri uygula</button>' : ""}

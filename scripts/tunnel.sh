@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Start the marketalyzer web interface and publish it through Cloudflare.
 #
+# Fixed address without a domain (the interface on Netlify, the server here):
+#   marketalyzer-netlify setup --token <Netlify personal access token>   # once
+#   scripts/tunnel.sh
+# Every start then opens a quick tunnel, writes its new address to the Netlify
+# site and prints https://marketalyzer.netlify.app/?token=..., which stays the same.
+#
 # Fixed address (needs a free Cloudflare account and a domain on Cloudflare):
 #   cloudflared tunnel login                       # once: pick the domain in the browser
 #   scripts/tunnel.sh --hostname bist.alanadiniz.com
@@ -66,6 +72,12 @@ elif [[ -n "$HOST_NAME" ]]; then MODE=named
 else MODE=quick
 fi
 
+# With a Netlify site, the quick tunnel's address is published there on every start.
+NETLIFY=""
+if [[ "$MODE" == quick ]] && command -v marketalyzer-netlify >/dev/null; then
+  NETLIFY="$(marketalyzer-netlify url 2>/dev/null | tail -n 1 || true)"
+fi
+
 if [[ "$MODE" == named ]]; then
   CF_DIR="$HOME/.cloudflared"
   if [[ ! -f "$CF_DIR/cert.pem" ]]; then
@@ -128,9 +140,19 @@ SHOWN=0
     echo "$line"
     [[ "$SHOWN" == 1 ]] && continue
     if [[ "$MODE" == quick && "$line" =~ (https://[a-z0-9-]+\.trycloudflare\.com) ]]; then
-      show "${BASH_REMATCH[1]}"
-      echo ">>> Bu adres her başlatmada değişir. Sabit adres için: scripts/tunnel.sh --hostname bist.alanadiniz.com"
+      TUNNEL_URL="${BASH_REMATCH[1]}"
       SHOWN=1
+      if [[ -n "$NETLIFY" ]]; then
+        echo "Netlify'a yeni tünel adresi yazılıyor…"
+        if marketalyzer-netlify deploy --backend "$TUNNEL_URL"; then
+          show "$NETLIFY"
+          echo ">>> Bu adres hiç değişmez; telefona uygulama olarak kurabilirsiniz."
+          continue
+        fi
+        echo "Netlify güncellenemedi; geçici adres kullanılıyor."
+      fi
+      show "$TUNNEL_URL"
+      echo ">>> Bu adres her başlatmada değişir. Sabit adres için: marketalyzer-netlify setup --token <anahtar>"
     elif [[ "$MODE" != quick && "$line" == *"Registered tunnel connection"* ]]; then
       if [[ -n "$HOST_NAME" ]]; then show "https://$HOST_NAME"; else echo ">>> Tünel bağlandı; panelde tanımladığınız adrese /?token=${MARKETALYZER_TOKEN} ekleyin."; fi
       SHOWN=1
