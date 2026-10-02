@@ -39,6 +39,7 @@ def api(monkeypatch):
     monkeypatch.setattr(netlify, "_request", request)
     monkeypatch.setattr(netlify.time, "sleep", lambda seconds: None)
     monkeypatch.delenv("NETLIFY_AUTH_TOKEN", raising=False)
+    monkeypatch.setattr(netlify, "cli_token", lambda: None)
     return fake
 
 
@@ -192,3 +193,42 @@ def test_no_cors_by_default(monkeypatch):
             },
         )
         assert "access-control-allow-origin" not in response.headers
+
+
+def test_token_from_the_netlify_cli(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("NETLIFY_AUTH_TOKEN", raising=False)
+    assert netlify.cli_token() is None
+    path = tmp_path / ".config" / "netlify" / "config.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "userId": "u2",
+                "users": {
+                    "u1": {"auth": {"token": "old"}},
+                    "u2": {"auth": {"token": "cli-token"}},
+                },
+            }
+        )
+    )
+    assert netlify.cli_token() == "cli-token"
+    assert netlify.find_token() == "cli-token"
+    monkeypatch.setenv("NETLIFY_AUTH_TOKEN", "env-token")
+    assert netlify.find_token() == "env-token"
+    assert netlify.find_token(" given ") == "given"
+
+
+def test_setup_without_any_token(api):
+    with pytest.raises(netlify.NetlifyError, match="netlify login"):
+        netlify.setup()
+
+
+def test_setup_uses_the_cli_login(api, monkeypatch):
+    monkeypatch.setattr(netlify, "cli_token", lambda: "cli-token")
+    api.replies.append(FakeResponse(201, SITE))
+    assert netlify.main(["setup"]) == 0
+    assert api.calls[0].token == "cli-token"
+    assert netlify.load_config()["token"] == "cli-token"

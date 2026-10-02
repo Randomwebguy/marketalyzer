@@ -268,8 +268,8 @@ Uygulama bir erişim anahtarıyla açılır. Anahtar ilk açılışta üretilir 
 
 **Alan adı olmadan sabit adres: Netlify.** Arayüz `https://marketalyzer.netlify.app` adresinde Netlify'da durur, sunucu bu bilgisayarda tünelle çalışmaya devam eder. Her başlatmada betik hızlı tünelin yeni adresini Netlify'daki `backend.json` dosyasına yazar (yaklaşık 250 KB'lık bir yükleme); arayüz sunucuyu oradan bulur ve istekleri erişim anahtarıyla doğrudan tünele gönderir. Adres hiç değişmez; anahtar tarayıcıda bu adrese bağlı saklanır, telefona kurulan uygulama da aynı adreste kalır. Sunucu yalnızca bu siteden gelen tarayıcı isteklerine izin verir (CORS).
 
-1. [app.netlify.com](https://app.netlify.com) hesabı açın; **User settings → Applications → Personal access tokens** bölümünden bir anahtar oluşturun.
-2. Bir kez: `marketalyzer-netlify setup --token <anahtar>` — `marketalyzer` adlı siteyi oluşturur (ad başka hesapta kullanılıyorsa `--name` ile başka bir ad verin). Anahtar ve site bilgisi `~/.local/share/marketalyzer/netlify.json` dosyasında (izin 600) saklanır.
+1. [app.netlify.com](https://app.netlify.com) hesabı açın. Netlify CLI ile giriş yaptıysanız (`netlify login`) başka bir şey gerekmez; yoksa **User settings → Applications → Personal access tokens** bölümünden bir anahtar oluşturun.
+2. Bir kez: `marketalyzer-netlify setup` (CLI oturumu ya da `NETLIFY_AUTH_TOKEN` kullanılır; yoksa `--token <anahtar>`) — `marketalyzer` adlı siteyi oluşturur (ad başka hesapta kullanılıyorsa `--name` ile başka bir ad verin). Anahtar ve site bilgisi `~/.local/share/marketalyzer/netlify.json` dosyasında (izin 600) saklanır.
 3. Her seferinde: `scripts/tunnel.sh` ya da `scripts\tunnel.ps1`. Bağlantı kurulunca `https://marketalyzer.netlify.app/?token=...` yazdırılır; ilk açılıştan sonra `?token=` olmadan da açılır.
 
 Netlify yalnızca statik arayüzü barındırır: backtest, yapay zeka ve sanal hesap bilgisayarınızda çalışır. Bilgisayar ya da tünel kapalıyken site açılır ama "Sunucuya ulaşılamıyor" uyarısı verir. Netlify'ı bırakmak için `marketalyzer-netlify forget`.
@@ -293,7 +293,7 @@ Tüneli Cloudflare panelinden (Zero Trust → Networks → Tunnels, genel ad →
 uv sync
 .venv\Scripts\Activate.ps1
 $env:OPENROUTER_API_KEY = "sk-or-..."      # isteğe bağlı; Ayarlar'dan da girilebilir
-marketalyzer-netlify setup --token <Netlify anahtarı>   # alan adı yoksa, bir kez: https://marketalyzer.netlify.app
+marketalyzer-netlify setup               # alan adı yoksa, bir kez (netlify login oturumu ya da --token <anahtar>)
 powershell -ExecutionPolicy Bypass -File scripts\tunnel.ps1          # her seferinde
 ```
 

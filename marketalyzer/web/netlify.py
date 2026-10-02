@@ -7,8 +7,9 @@ deploys the interface again with ``backend.json`` naming the new address, and
 the interface calls the server there with the access token kept in the
 browser. The server accepts cross-site requests only from the Netlify site.
 
-The Netlify personal access token and the site id are stored in
-``<home>/netlify.json``, readable only by the owner.
+The Netlify token comes from ``--token``, ``NETLIFY_AUTH_TOKEN`` or the
+account the Netlify CLI is signed in to (``netlify login``). It is stored with
+the site id in ``<home>/netlify.json``, readable only by the owner.
 """
 
 from __future__ import annotations
@@ -116,10 +117,54 @@ def create_site(token: str, name: str = SITE_NAME) -> dict[str, Any]:
     return _json(response, "site oluşturma")
 
 
-def setup(token: str, name: str | None = None) -> dict[str, Any]:
+def _cli_config_files() -> list[Path]:
+    """Where the Netlify CLI keeps its login, by version and platform."""
+    home = Path.home()
+    files = [home / ".netlify" / "config.json"]
+    if os.environ.get("APPDATA"):
+        files.append(Path(os.environ["APPDATA"]) / "netlify" / "Config" / "config.json")
+    files.append(home / "Library" / "Preferences" / "netlify" / "config.json")
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+    files.append(config_home / "netlify" / "config.json")
+    return files
+
+
+def cli_token() -> str | None:
+    """Return the token of the account the Netlify CLI is signed in to."""
+    for path in _cli_config_files():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        users = data.get("users") if isinstance(data, dict) else None
+        if not isinstance(users, dict) or not users:
+            continue
+        user = users.get(data.get("userId")) or next(iter(users.values()))
+        token = ((user or {}).get("auth") or {}).get("token")
+        if token:
+            return str(token)
+    return None
+
+
+def find_token(given: str | None = None) -> str | None:
+    """Return a Netlify token: the given one, the environment's or the CLI's."""
+    return (
+        (given or "").strip()
+        or os.environ.get("NETLIFY_AUTH_TOKEN", "").strip()
+        or cli_token()
+    )
+
+
+def setup(token: str | None = None, name: str | None = None) -> dict[str, Any]:
     """Create the site (or keep the configured one) and store the settings."""
     config = load_config()
-    token = token.strip()
+    token = find_token(token)
+    if not token:
+        raise NetlifyError(
+            "Netlify anahtarı bulunamadı. 'netlify login' ile giriş yapın, ya da"
+            " --token <anahtar> verin (app.netlify.com > User settings > Applications"
+            " > Personal access tokens)."
+        )
     if config.get("site_id") and name in (None, config.get("name")):
         config["token"] = token
         save_config(config)
@@ -167,7 +212,7 @@ def deploy(backend: str, config: dict[str, Any] | None = None) -> str:
     Returns the site's address.
     """
     config = config or load_config()
-    token = os.environ.get("NETLIFY_AUTH_TOKEN") or config.get("token")
+    token = os.environ.get("NETLIFY_AUTH_TOKEN") or config.get("token") or cli_token()
     if not token or not config.get("site_id"):
         raise NetlifyError(
             "Netlify ayarlı değil. Önce: marketalyzer-netlify setup --token <anahtar>"
@@ -205,7 +250,9 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     setup_cmd = commands.add_parser("setup", help="Siteyi oluştur ve anahtarı kaydet")
     setup_cmd.add_argument(
-        "--token", required=True, help="Netlify personal access token"
+        "--token",
+        help="Netlify personal access token (varsayılan: NETLIFY_AUTH_TOKEN ya da"
+        " 'netlify login' oturumu)",
     )
     setup_cmd.add_argument(
         "--name", help=f"Site adı: <ad>.netlify.app (varsayılan: {SITE_NAME})"
