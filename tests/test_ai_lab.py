@@ -498,6 +498,70 @@ def test_author_fixes_and_saves_the_script():
     assert "Derleme hatası" in calls[1][-1]["content"]
 
 
+REPORT = {
+    "round": 1,
+    "bars": 60,
+    "ai": {"return_pct": 1.2, "trades": 1, "win_rate_pct": 100.0, "exposure_pct": 4.0},
+    "signals": {"return_pct": 3.4, "trades": 6, "win_rate_pct": 50.0},
+    "hold_return_pct": 12.5,
+    "benchmark_return_pct": 5.1,
+    "symbols": [
+        {
+            "hisse": "Hisse A",
+            "ai_trades": 1,
+            "ai_return_pct": 1.2,
+            "signals_trades": 6,
+            "signals_return_pct": 3.4,
+            "hold_return_pct": 12.5,
+        }
+    ],
+    "karar_gunlugu": {"reddedilen_giris": {"adet": 5, "kar_ettirecek_%": 60.0}},
+    "dersler": ["Aşırı satımda sinyali uygula."],
+}
+
+
+def test_window_report_text_is_anonymous():
+    text = blind.report_text(REPORT)
+    assert "Hisse A" in text and "Aşırı satımda sinyali uygula." in text
+    assert "%12.5" in text and "XU100" in text and not DATE.search(text)
+
+
+def test_author_revises_a_script_from_a_window_report():
+    broken = '```pine\n//@version=5\nstrategy("x")\nif close >\n```'
+    good = f"```pine\n{STRATEGY}```\n- Daha uzun tutuldu."
+    stream, calls = stream_replies(broken, good)
+    events = []
+    result = author.revise_script(
+        STRATEGY,
+        blind.report_text(REPORT),
+        ["THYAO", "GARAN"],
+        cutoff=(TODAY - timedelta(days=100)).isoformat(),
+        years=1,
+        api_key="k",
+        model="m",
+        emit=events.append,
+        stream=stream,
+        name="ai_test_t2",
+    )
+    assert result["name"] == "ai_test_t2" and result["attempts"] == 2
+    assert result["explanation"] == "- Daha uzun tutuldu."
+    assert get_script("ai_test_t2")["source"] == STRATEGY
+    assert calls[0][0]["content"].startswith(author.REVISE[:60])
+    prompt = calls[0][1]["content"]
+    assert "Hisse A" in prompt and "THYAO" not in prompt and not DATE.search(prompt)
+    assert "Aşırı satımda sinyali uygula." in prompt and "ta.crossover(f, s)" in prompt
+    assert "Derleme hatası" in calls[1][-1]["content"]
+
+
+def test_revised_names_are_valid_script_names():
+    assert blind.revised_name("ai_enkai_tuprs_20261003_0158", 2) == (
+        "ai_enkai_tuprs_20261003_0158_t2"
+    )
+    assert blind.revised_name("ai_x_t2", 3) == "ai_x_t3"
+    assert blind.revised_name("editör", 2) == "edit_r_t2"
+    assert len(blind.revised_name("a" * 48, 4)) <= 48
+
+
 def test_author_rejects_scripts_without_entries():
     never = STRATEGY.replace("ta.crossover(f, s)", "close < 0")
     stream, _ = stream_replies(*[f"```pine\n{never}```"] * author.MAX_ATTEMPTS)

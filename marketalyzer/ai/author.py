@@ -211,8 +211,45 @@ def author_script(
             "content": user_prompt(research.summary_text(anon), goal, len(codes)),
         },
     ]
+    written = _write(messages, frames, api_key, model, emit, cancelled, stream)
+    name = name or default_name(codes)
+    saved = save_script(name, written["source"])
+    emit({"type": "stage", "stage": "saved", "message": f"Kaydedildi: {name}"})
+    return {
+        "name": name,
+        "source": written["source"],
+        "script": saved,
+        "explanation": explanation(written["reply"]),
+        "attempts": written["attempts"],
+        "entries": written["entries"],
+        "model": model,
+        "usage": written["usage"],
+        "symbols": codes,
+        "cutoff": result["cutoff"],
+        "train_start": result["start"],
+    }
+
+
+def _write(
+    messages: list[dict[str, Any]],
+    frames: dict[str, tuple[pd.DataFrame, Any]],
+    api_key: str,
+    model: str,
+    emit: Callable[[dict[str, Any]], None],
+    cancelled: Callable[[], bool],
+    stream: Callable[..., Any],
+) -> dict[str, Any]:
+    """Have the model write a script until it passes ``review``.
+
+    Each problem goes back to the model, up to ``MAX_ATTEMPTS`` replies.
+    Returns ``source``, ``reply``, ``attempts``, ``entries`` and ``usage``.
+
+    Raises
+    ------
+    ValueError
+        If no reply gives a working strategy (Turkish message).
+    """
     usage: dict[str, float] = {}
-    source = None
     reply = ""
     checked: dict[str, Any] = {}
     for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -235,8 +272,13 @@ def author_script(
             checked = review(code, frames)
         emit({"type": "review", "attempt": attempt, **checked})
         if code is not None and not checked["problem"]:
-            source = code
-            break
+            return {
+                "source": code,
+                "reply": reply,
+                "attempts": attempt,
+                "entries": checked.get("entries"),
+                "usage": usage,
+            }
         messages += [
             {"role": "assistant", "content": reply},
             {
@@ -245,24 +287,93 @@ def author_script(
                 " tamamını tek bir ```pine bloğunda yeniden ver.",
             },
         ]
-    if source is None:
-        raise ValueError(
-            f"Model {MAX_ATTEMPTS} denemede çalışan bir strateji yazamadı:"
-            f" {checked.get('problem')}"
-        )
-    name = name or default_name(codes)
-    saved = save_script(name, source)
-    emit({"type": "stage", "stage": "saved", "message": f"Kaydedildi: {name}"})
+    raise ValueError(
+        f"Model {MAX_ATTEMPTS} denemede çalışan bir strateji yazamadı:"
+        f" {checked.get('problem')}"
+    )
+
+
+# --- Revision -----------------------------------------------------------------------
+
+REVISE = """Sen Borsa İstanbul için kural tabanlı strateji yazan deneyimli bir quant
+geliştiricisin. Bir strateji scripti kör testin bir penceresinde işlem gördü; sana
+scriptin kendisi, o pencerenin sonuçları, sinyalleri onaylayan yapay zeka karar
+katmanının ders notları ve pencere sonuna kadar güncellenmiş sinyal araştırması
+verilir. Hisse adları ve tarihler gizlidir: piyasa hakkındaki bilgini değil, yalnızca
+verilen sayıları kullan.
+
+Görevin scripti bir sonraki pencere için geliştirmek. Hedefler:
+- Toplam getiride hem XU100'ü hem de stratejinin yapay zekasız sonucunu geçmek.
+- Her hissede pencere başına en az 1 işlem; az işlem istatistiksel olarak zayıftır.
+- En büyük düşüş, al-tut stratejisininkinden küçük kalsın.
+Piyasada kalma oranı düşük ve al-tut çok öndeyse trend takibi, daha uzun tutma ya da
+daha gevşek giriş düşün; işlemler zarar ettiyse ve hep aynı koşulda kaybettiyse filtre
+ekle. Karar katmanının hep reddettiği ya da hep kaybettiği sinyalleri iyileştir ya da
+kaldır. Çalışan kuralları gereksiz yere değiştirme.
+
+Kurallar:
+- //@version=5 ve strategy("Ad", overlay=true) ile başla. Yalnızca uzun pozisyon.
+- En fazla 5 input; her input'a minval, maxval ve step ver.
+- Mutlaka bir çıkış kuralı (strategy.close) ve strategy.exit ile zarar durdur içersin.
+- Giriş ve çıkış koşullarını plotshape ile işaretle; sinyaller her barda tetiklenmesin.
+- Aşırı uyumdan kaçın: az sayıda basit kural, yuvarlak eşikler.
+- Kod içindeki açıklamalar Türkçe olsun.
+
+Yanıt biçimi: önce tek bir ```pine bloğunda kodun tamamı, sonra en fazla 6 madde ile
+neyi neden değiştirdiğini kısaca açıkla."""
+
+
+def revise_system_prompt() -> str:
+    """Return the reviser's instructions with the script language reference."""
+    return "\n\n".join([REVISE, LANGUAGE, _function_list()])
+
+
+def revise_script(
+    source: str,
+    report_text: str,
+    symbols: list[str],
+    *,
+    cutoff: str,
+    years: float,
+    api_key: str,
+    model: str,
+    emit: Callable[[dict[str, Any]], None],
+    name: str,
+    cancelled: Callable[[], bool] = lambda: False,
+    interval: str = "1d",
+    stream: Callable[..., Any] = stream_chat,
+) -> dict[str, Any]:
+    """Have the model improve ``source`` from a window's report and save it.
+
+    The study is cut at ``cutoff`` (the window's last day), so the revision
+    sees nothing later. The new script is checked like a new one and saved
+    as ``name``. Returns ``name``, ``source``, ``explanation``, ``attempts``,
+    ``entries`` and ``usage``.
+
+    Raises
+    ------
+    ValueError
+        If no reply gives a working strategy (Turkish message).
+    """
+    result, frames, _ = research.prepare(symbols, cutoff, years, interval)
+    anon = research.anonymize(result)
+    content = (
+        f"Hisse sayısı: {len(result['symbols'])}\n\n"
+        f"Mevcut script:\n```pine\n{source.rstrip()}\n```\n\n"
+        f"Son pencerenin sonuçları:\n{report_text}\n\n"
+        f"Sinyal araştırması (pencere sonuna kadar):\n{research.summary_text(anon)}"
+    )
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": revise_system_prompt()},
+        {"role": "user", "content": content},
+    ]
+    written = _write(messages, frames, api_key, model, emit, cancelled, stream)
+    save_script(name, written["source"])
     return {
         "name": name,
-        "source": source,
-        "script": saved,
-        "explanation": explanation(reply),
-        "attempts": attempt,
-        "entries": checked.get("entries"),
-        "model": model,
-        "usage": usage,
-        "symbols": codes,
-        "cutoff": result["cutoff"],
-        "train_start": result["start"],
+        "source": written["source"],
+        "explanation": explanation(written["reply"]),
+        "attempts": written["attempts"],
+        "entries": written["entries"],
+        "usage": written["usage"],
     }

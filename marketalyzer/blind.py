@@ -28,15 +28,16 @@ import numpy as np
 import pandas as pd
 
 from marketalyzer import research
-from marketalyzer.ai import learn
+from marketalyzer.ai import author, learn
 from marketalyzer.ai.decide import (
     Decider,
     position_view,
     script_view,
     snapshot,
 )
+from marketalyzer.ai.openrouter import OpenRouterError
 from marketalyzer.backtest.costs import BistCosts, tick_size
-from marketalyzer.scripting import Script
+from marketalyzer.scripting import Script, ScriptError, compile_script
 from marketalyzer.services import (
     _parse_date,
     _script,
@@ -1082,6 +1083,103 @@ def _round_report(
     return report
 
 
+def _pct(value: Any) -> str:
+    return "—" if value is None else f"%{value}"
+
+
+def report_text(report: dict[str, Any]) -> str:
+    """Write a window's anonymous report as text for the script author."""
+    lines = [f"Pencere {report['round']}: {report.get('bars')} bar."]
+    for key, label in (("ai", "Yapay zeka ile"), ("signals", "Sadece sinyaller")):
+        found = report.get(key)
+        if found:
+            lines.append(
+                f"{label}: getiri {_pct(found.get('return_pct'))},"
+                f" {found.get('trades')} işlem,"
+                f" kazançlı {_pct(found.get('win_rate_pct'))},"
+                f" en büyük düşüş {_pct(found.get('max_drawdown_pct'))},"
+                f" piyasada kalma {_pct(found.get('exposure_pct'))}."
+            )
+    lines.append(
+        f"Al-tut (hisse ortalaması): {_pct(report.get('hold_return_pct'))}"
+        f" · XU100: {_pct(report.get('benchmark_return_pct'))}."
+    )
+    lines.append("Hisseler:")
+    for item in report.get("symbols") or []:
+        ai = (
+            f"yapay zeka {_pct(item.get('ai_return_pct'))}"
+            f" ({item.get('ai_trades')} işlem), "
+            if "ai_trades" in item
+            else ""
+        )
+        lines.append(
+            f"- {item['hisse']}: {ai}sinyaller {_pct(item.get('signals_return_pct'))}"
+            f" ({item.get('signals_trades')} işlem),"
+            f" al-tut {_pct(item.get('hold_return_pct'))}"
+        )
+    if report.get("karar_gunlugu"):
+        summary = json.dumps(report["karar_gunlugu"], ensure_ascii=False)
+        lines.append(f"Karar günlüğü özeti: {summary}")
+    if report.get("dersler"):
+        lines.append("Karar katmanının ders notları:")
+        lines += [f"- {lesson}" for lesson in report["dersler"]]
+    return "\n".join(lines)
+
+
+def revised_name(base: str | None, round_no: int) -> str:
+    """Name the script revised for window ``round_no``: ``<base>_t<round_no>``."""
+    stem = re.sub(r"_t\d+$", "", base or "editor").lower()
+    stem = re.sub(r"[^a-z0-9_-]", "_", stem).strip("_-") or "script"
+    suffix = f"_t{round_no}"
+    return stem[: 48 - len(suffix)] + suffix
+
+
+def reviser(
+    config: BlindConfig,
+    coach: learn.Coach,
+    *,
+    emit: Callable[[dict[str, Any]], None] = lambda event: None,
+    cancelled: Callable[[], bool] = lambda: False,
+) -> Callable[..., tuple[Script | None, dict[str, Any]]]:
+    """Return a ``revise`` hook for ``run_blind`` that asks the script author."""
+
+    def revise(round_no: int, script: Script, report: dict, cutoff: date):
+        name = revised_name(script.name, round_no + 1)
+
+        def forward(event: dict[str, Any]) -> None:
+            if event.get("type") == "review" and event.get("problem"):
+                emit({"type": "revision_review", "round": round_no,
+                      "attempt": event["attempt"], "problem": event["problem"]})  # fmt: skip
+
+        try:
+            written = author.revise_script(
+                script.source,
+                report_text(report),
+                config.symbols,
+                cutoff=cutoff.isoformat(),
+                years=config.years,
+                api_key=coach.api_key,
+                model=coach.model,
+                emit=forward,
+                name=name,
+                cancelled=cancelled,
+                interval=config.interval,
+                stream=coach.stream,
+            )
+        except author.Cancelled:
+            raise Cancelled from None
+        except (ValueError, OpenRouterError, ScriptError) as error:
+            return None, {"problem": str(error)}
+        info = {
+            "explanation": written["explanation"],
+            "attempts": written["attempts"],
+            "cost_usd": number((written["usage"] or {}).get("cost", 0.0), 4),
+        }
+        return compile_script(written["source"], name), info
+
+    return revise
+
+
 def run_blind(
     config: BlindConfig,
     decider: Decider | None = None,
@@ -1254,11 +1352,11 @@ class _Rounds:
             {"type": "stage", "stage": "revising", "message": "Script geliştiriliyor"}
         )
         report = _round_report(row, letters, self.learner, end)
-        revised = revise(row["round"], script, report, end.date())
-        if revised is None:
-            row["revision"] = {"ok": False, "name": script.name or "editör"}
+        new, info = revise(row["round"], script, report, end.date()) or (None, {})
+        if new is None:
+            row["revision"] = {"ok": False, **info, "name": script.name or "editör"}
         else:
-            script, info = revised
+            script = new
             row["revision"] = {"ok": True, **info, "name": script.name or "editör"}
         self.emit({"type": "revision", "round": row["round"], **row["revision"]})
         return script
