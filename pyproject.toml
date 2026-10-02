@@ -8,14 +8,17 @@ dependencies = [
     "openbb-bist",
     "backtesting>=0.6.6",
     "pandas>=2.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
 ]
 
 [project.scripts]
 marketalyzer-backtest = "marketalyzer.backtest.cli:main"
 marketalyzer-paper = "marketalyzer.paper.cli:main"
+marketalyzer-web = "marketalyzer.web.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff>=0.6", "httpx2>=2.13"]
 
 [tool.uv.workspace]
 members = ["providers/bist"]
@@ -44,7 +47,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "D"]
+"tests/**" = ["S101", "S105", "D"]
 "marketalyzer/*/cli.py" = ["T20"]
 "**/__init__.py" = ["F401"]
 

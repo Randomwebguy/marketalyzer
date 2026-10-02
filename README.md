@@ -10,6 +10,8 @@ Borsa İstanbul (BIST) üzerinde yapay zeka destekli strateji denemeleri için b
 providers/bist/          openbb-bist: OpenBB ODP V5 için BIST veri sağlayıcısı
 marketalyzer/backtest/   backtesting.py üzerine kurulu BIST backtest motoru
 marketalyzer/paper/      sanal hesapla paper trading simülatörü
+marketalyzer/web/        tarayıcı arayüzü (FastAPI)
+scripts/tunnel.sh        arayüzü Cloudflare tüneliyle yayınlama
 tests/                   backtest ve paper trading testleri
 ```
 
@@ -172,6 +174,19 @@ marketalyzer-paper walkforward THYAO -s sma_cross --start 2018-01-01 --train 504
 - Taban ve tavan fiyat limitleri, açılış ve kapanış seansı eşleşmeleri ve emir defteri derinliği modellenmez.
 - Temettüler yalnızca günlük barlarla (`--interval 1d`) nakit olarak ödenir; varsayılan stopaj oranı %15'tir (`--dividend-tax`, güncel oranı kontrol edin). Dakikalık barlarda temettü yansımaz.
 - Bölünme ve bedelsiz sermaye artırımlarında replay, bölünmeye göre düzeltilmiş fiyatlarla çalıştığı için sonuç tutarlıdır. Canlı çalışan bir hesapta ise bölünme günü pozisyon adedi değişmez; bunu elle düzeltmek gerekir.
+
+## Web arayüzü ve Cloudflare tüneli
+
+Backtest, walk-forward ve paper hesap ekranları tarayıcıdan, telefondan da kullanılabilir.
+
+```sh
+marketalyzer-web                 # http://127.0.0.1:8000/?token=... adresini yazdırır
+scripts/tunnel.sh                # arayüzü başlatır ve Cloudflare tüneliyle yayınlar
+```
+
+`scripts/tunnel.sh` için [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) kurulu olmalıdır. Betik geçici bir `https://<rastgele>.trycloudflare.com` adresi açar ve erişim anahtarıyla birlikte tam adresi yazdırır. Uygulama yalnızca bu anahtarla açılır; adresi bilen herkes arayüze erişebileceği için paylaşmayın. Sabit bir anahtar için `MARKETALYZER_TOKEN` ortam değişkeni kullanılabilir. Tünel, betik çalıştığı sürece açık kalır.
+
+Arayüzün yönettiği paper hesap `web` adını taşır; `marketalyzer-paper --account web status` ile komut satırından da görülebilir.
 
 ## Geliştirme
 

@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>marketalyzer</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66;
+    --line: #e2e2dc; --accent: #2457c5; --good: #1f7a4a; --bad: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --panel: #20201e; --text: #ececE8; --muted: #a3a39c;
+      --line: #34342f; --accent: #7aa2ff; --good: #5cc28d; --bad: #f2867e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 16px; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 18px; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+  nav { display: flex; gap: 4px; padding: 8px 16px 0; overflow-x: auto; }
+  nav button { border: 1px solid var(--line); border-bottom: none; background: none;
+               color: var(--muted); padding: 8px 14px; border-radius: 8px 8px 0 0;
+               cursor: pointer; font: inherit; white-space: nowrap; }
+  nav button.active { background: var(--panel); color: var(--text); }
+  main { padding: 0 16px 32px; }
+  section { display: none; background: var(--panel); border: 1px solid var(--line);
+            border-radius: 0 8px 8px 8px; padding: 16px; }
+  section.active { display: block; }
+  form { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+         gap: 10px; align-items: end; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 13px;
+          color: var(--muted); }
+  input, select { font: inherit; padding: 7px 8px; border: 1px solid var(--line);
+                  border-radius: 6px; background: var(--bg); color: var(--text);
+                  min-width: 0; }
+  label.check { flex-direction: row; align-items: center; gap: 6px; }
+  button.run { font: inherit; padding: 8px 14px; border: none; border-radius: 6px;
+               background: var(--accent); color: #fff; cursor: pointer; }
+  button.run:disabled { opacity: .6; cursor: wait; }
+  .note { color: var(--muted); font-size: 13px; margin: 10px 0 0; }
+  .out { margin-top: 16px; overflow-x: auto; }
+  .error { color: var(--bad); white-space: pre-wrap; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px;
+          font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line);
+           white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; }
+  td.num { text-align: right; }
+  .pos { color: var(--good); } .neg { color: var(--bad); }
+  h3 { margin: 18px 0 6px; font-size: 15px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>marketalyzer</h1>
+  <p>BIST için backtest ve sanal hesapla işlem denemeleri. Gerçek para kullanılmaz.</p>
+</header>
+<nav>
+  <button data-tab="backtest" class="active">Backtest</button>
+  <button data-tab="walkforward">Walk-forward</button>
+  <button data-tab="paper">Paper hesap</button>
+</nav>
+<main>
+  <section id="backtest" class="active">
+    <form id="backtest-form">
+      <label>Sembol <input name="symbol" value="THYAO" required></label>
+      <label>Strateji <select name="strategy" class="strategies"></select></label>
+      <label>Başlangıç <input name="start" type="date"></label>
+      <label>Bitiş <input name="end" type="date"></label>
+      <label>Parametreler <input name="params" placeholder="fast=10, slow=50"></label>
+      <label>Başlangıç TL <input name="cash" type="number" value="100000"></label>
+      <label>Komisyon <input name="commission" type="number" step="0.0001" value="0.002"></label>
+      <label>Kayma <input name="slippage" type="number" step="0.0001" value="0.001"></label>
+      <label class="check"><input name="optimize" type="checkbox"> Optimize et</label>
+      <button class="run">Çalıştır</button>
+    </form>
+    <p class="note">Optimizasyonda parametreler verinin ilk %70'inde seçilir, son %30'da test edilir.</p>
+    <div class="out" id="backtest-out"></div>
+  </section>
+
+  <section id="walkforward">
+    <form id="walkforward-form">
+      <label>Sembol <input name="symbol" value="THYAO" required></label>
+      <label>Strateji <select name="strategy" class="strategies"></select></label>
+      <label>Başlangıç <input name="start" type="date" value="2019-01-01" required></label>
+      <label>Bitiş <input name="end" type="date"></label>
+      <label>Eğitim [gün] <input name="train" type="number" value="504"></label>
+      <label>Test [gün] <input name="test" type="number" value="126"></label>
+      <label>Başlangıç TL <input name="cash" type="number" value="100000"></label>
+      <label>Komisyon <input name="commission" type="number" step="0.0001" value="0.002"></label>
+      <button class="run">Çalıştır</button>
+    </form>
+    <p class="note">Her pencerede parametreler önceki dönemde optimize edilir, sonraki dönem sanal hesapta işlenir. Birkaç dakika sürebilir.</p>
+    <div class="out" id="walkforward-out"></div>
+  </section>
+
+  <section id="paper">
+    <div id="paper-status" class="out"></div>
+    <h3>Emir ver</h3>
+    <form id="order-form">
+      <label>Sembol <input name="symbol" value="THYAO" required></label>
+      <label>Yön <select name="side"><option value="buy">Al</option><option value="sell">Sat</option></select></label>
+      <label>Adet <input name="qty" type="number" min="1" value="10" required></label>
+      <label>Tip <select name="type"><option value="market">Piyasa</option><option value="limit">Limit</option><option value="stop">Stop</option></select></label>
+      <label>Fiyat <input name="price" type="number" step="0.01"></label>
+      <label>Geçerlilik <select name="tif"><option value="day">Gün</option><option value="gtc">İptale kadar</option></select></label>
+      <button class="run">Gönder</button>
+    </form>
+    <h3>Veriyi işle</h3>
+    <form id="step-form">
+      <label>Semboller <input name="symbols" value="THYAO" required></label>
+      <label>Strateji <select name="strategy" class="strategies"><option value="">(yok)</option></select></label>
+      <label>Parametreler <input name="params" placeholder="fast=10, slow=50"></label>
+      <label>Periyot <select name="interval"><option>1d</option><option>1h</option><option>5m</option></select></label>
+      <button class="run">Bir adım çalıştır</button>
+    </form>
+    <p class="note">Yeni barları işler, emirleri eşleştirir ve strateji seçildiyse sinyale göre emir verir (gecikmeli veri).</p>
+    <div class="out" id="step-out"></div>
+    <h3>Hesabı sıfırla</h3>
+    <form id="init-form">
+      <label>Başlangıç TL <input name="cash" type="number" value="100000"></label>
+      <label>Komisyon <input name="commission" type="number" step="0.0001" value="0.002"></label>
+      <label>Kayma <input name="slippage" type="number" step="0.0001" value="0.001"></label>
+      <button class="run">Yeni hesap aç</button>
+    </form>
+  </section>
+</main>
+<script>
+const LABELS = {
+  return_pct: "Getiri [%]", buy_hold_return_pct: "Al ve tut [%]", cagr_pct: "Yıllık bileşik [%]",
+  sharpe: "Sharpe", max_drawdown_pct: "En büyük düşüş [%]", trades: "İşlem", win_rate_pct: "Kazançlı işlem [%]",
+  equity_final: "Son bakiye [TL]", commissions: "Komisyon [TL]", benchmark_return_pct: "XU100 [%]",
+  usdtry_change_pct: "USD/TRY [%]", return_usd_pct: "USD bazında getiri [%]", exposure_pct: "Pozisyonda [%]",
+  start: "Başlangıç", end: "Bitiş", params: "Parametreler", equity: "Özsermaye [TL]", cash: "Nakit [TL]",
+  dividends: "Net temettü [TL]", realized_pnl: "Gerçekleşen K/Z [TL]", unrealized_pnl: "Gerçekleşmemiş K/Z [TL]",
+};
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const fmt = (v) => typeof v === "number" ? v.toLocaleString("tr-TR", {maximumFractionDigits: 2})
+  : v && typeof v === "object" ? Object.entries(v).map(([k, x]) => `${k}=${x}`).join(", ") : (v ?? "-");
+const WORDS = {buy: "Al", sell: "Sat", market: "Piyasa", limit: "Limit", stop: "Stop",
+  day: "Gün", gtc: "İptale kadar"};
+const word = (key) => (row) => esc(WORDS[row[key]] || row[key]);
+const tone = (k, v) => typeof v === "number" && /pct|pnl/.test(k) ? (v > 0 ? "pos" : v < 0 ? "neg" : "") : "";
+
+function kv(obj, keys) {
+  const rows = keys.filter((k) => obj[k] !== undefined && obj[k] !== null)
+    .map((k) => `<tr><th>${esc(LABELS[k] || k)}</th><td class="num ${tone(k, obj[k])}">${esc(fmt(obj[k]))}</td></tr>`);
+  return `<table>${rows.join("")}</table>`;
+}
+function table(rows, cols) {
+  if (!rows.length) return '<p class="note">Kayıt yok.</p>';
+  const head = cols.map(([, label]) => `<th>${esc(label)}</th>`).join("");
+  const body = rows.map((r) => "<tr>" + cols.map(([k, , f]) => {
+    const v = f ? f(r) : r[k];
+    return `<td class="${typeof v === "number" ? "num " + tone(k, v) : ""}">${f ? v : esc(fmt(v))}</td>`;
+  }).join("") + "</tr>").join("");
+  return `<table><tr>${head}</tr>${body}</table>`;
+}
+function parseParams(text) {
+  const out = {};
+  for (const part of (text || "").split(/[,;\s]+/).filter(Boolean)) {
+    const [k, v] = part.split("=");
+    if (k && v !== undefined && !isNaN(Number(v))) out[k.trim()] = Number(v);
+  }
+  return out;
+}
+function formData(form) {
+  const data = {};
+  for (const el of form.elements) {
+    if (!el.name) continue;
+    if (el.type === "checkbox") data[el.name] = el.checked;
+    else if (el.value === "") continue;
+    else data[el.name] = el.type === "number" ? Number(el.value) : el.value;
+  }
+  return data;
+}
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} : {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = Array.isArray(data.detail) ? data.detail.map((d) => d.msg).join("\n") : data.detail;
+    throw new Error(detail || `HTTP ${res.status}`);
+  }
+  return data;
+}
+function bind(formId, outId, run) {
+  const form = $("#" + formId);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = $("button.run", form);
+    const out = outId && $("#" + outId);
+    button.disabled = true;
+    if (out) out.innerHTML = '<p class="note">Çalışıyor…</p>';
+    try { const html = await run(formData(form)); if (out && html !== undefined) out.innerHTML = html; }
+    catch (error) { (out || $("#paper-status")).innerHTML = `<p class="error">Hata: ${esc(error.message)}</p>`; }
+    finally { button.disabled = false; }
+  });
+}
+
+const SUMMARY = ["start", "end", "params", "return_pct", "buy_hold_return_pct", "benchmark_return_pct",
+  "return_usd_pct", "usdtry_change_pct", "cagr_pct", "sharpe", "max_drawdown_pct", "trades",
+  "win_rate_pct", "exposure_pct", "commissions", "equity_final"];
+
+bind("backtest-form", "backtest-out", async (data) => {
+  data.params = parseParams(data.params);
+  const r = await api("/api/backtest", data);
+  const link = `<p><a href="${esc(r.plot)}" target="_blank" rel="noopener">Etkileşimli grafiği aç</a></p>`;
+  if (r.best_params) {
+    let html = `<p>En iyi parametreler: <b>${esc(fmt(r.best_params))}</b></p>${link}`;
+    html += "<h3>Eğitim dönemi</h3>" + kv(r.in_sample, SUMMARY);
+    if (r.out_of_sample) html += "<h3>Test dönemi (görülmemiş veri)</h3>" + kv(r.out_of_sample, SUMMARY);
+    return html;
+  }
+  return link + kv(r, SUMMARY);
+});
+
+bind("walkforward-form", "walkforward-out", async (data) => {
+  const r = await api("/api/walkforward", data);
+  return kv(r, ["start", "end", "return_pct", "buy_hold_return_pct", "max_drawdown_pct", "trades",
+    "commissions", "dividends", "equity"]) + "<h3>Pencereler</h3>" + table(r.windows, [
+    ["test_start", "Test başı"], ["test_end", "Test sonu"], ["params", "Parametreler"],
+    ["in_sample_sharpe", "Eğitim Sharpe"], ["forward_return_pct", "İleri [%]"],
+    ["buy_hold_return_pct", "Al-tut [%]"], ["trades", "İşlem"],
+  ]);
+});
+
+async function refreshPaper() {
+  const r = await api("/api/paper");
+  const box = $("#paper-status");
+  if (!r.exists) { box.innerHTML = '<p class="note">Henüz paper hesap yok. Aşağıdan yeni hesap açın.</p>'; return; }
+  const open = r.orders.filter((o) => o.status === "open");
+  box.innerHTML = kv(r, ["cash", "equity", "return_pct", "realized_pnl", "unrealized_pnl", "dividends"])
+    + "<h3>Pozisyonlar</h3>" + table(r.positions, [["symbol", "Sembol"], ["qty", "Adet"],
+      ["avg_cost", "Ort. maliyet"], ["last_price", "Son fiyat"], ["unrealized_pnl", "K/Z"]])
+    + "<h3>Açık emirler</h3>" + table(open, [["id", "#"], ["symbol", "Sembol"], ["side", "Yön", word("side")],
+      ["qty", "Adet"], ["type", "Tip", word("type")], ["limit_price", "Limit"], ["stop_price", "Stop"],
+      ["tif", "Geçerlilik", word("tif")],
+      ["id", "", (o) => `<button class="run" data-cancel="${o.id}">İptal</button>`]])
+    + "<h3>Son işlemler</h3>" + table(r.fills.slice().reverse(), [
+      ["time", "Zaman", (f) => esc(f.time.slice(0, 16).replace("T", " "))], ["symbol", "Sembol"],
+      ["side", "Yön", word("side")], ["qty", "Adet"], ["price", "Fiyat"], ["commission", "Komisyon"]]);
+}
+$("#paper-status").addEventListener("click", async (event) => {
+  const id = event.target.dataset.cancel;
+  if (!id) return;
+  try { await api(`/api/paper/cancel/${id}`, {}); await refreshPaper(); }
+  catch (error) { alert(error.message); }
+});
+bind("order-form", null, async (data) => {
+  if (data.type === "market") delete data.price;
+  await api("/api/paper/order", data);
+  await refreshPaper();
+});
+bind("step-form", "step-out", async (data) => {
+  const body = {symbols: data.symbols.split(/[,\s]+/).filter(Boolean), interval: data.interval,
+    params: parseParams(data.params)};
+  if (data.strategy) body.strategy = data.strategy;
+  const r = await api("/api/paper/step", body);
+  await refreshPaper();
+  const errors = Object.entries(r.errors).map(([s, e]) => `<p class="error">${esc(s)}: ${esc(e)}</p>`).join("");
+  const signals = Object.entries(r.signals).map(([s, w]) => `${s}=${w ? "AL" : "NAKİT"}`).join(", ");
+  return `<p>${r.bars} yeni bar, ${r.fills.length} işlem, ${r.orders.length} yeni emir${signals ? " · sinyal: " + esc(signals) : ""}</p>${errors}`;
+});
+bind("init-form", null, async (data) => {
+  if (!confirm("Mevcut paper hesap silinip yenisi açılacak. Devam edilsin mi?")) return;
+  await api("/api/paper/init", {...data, reset: true});
+  await refreshPaper();
+});
+
+for (const button of document.querySelectorAll("nav button")) {
+  button.addEventListener("click", () => {
+    document.querySelectorAll("nav button, section").forEach((el) => el.classList.remove("active"));
+    button.classList.add("active");
+    $("#" + button.dataset.tab).classList.add("active");
+    if (button.dataset.tab === "paper") refreshPaper().catch((e) => { $("#paper-status").innerHTML = `<p class="error">${esc(e.message)}</p>`; });
+  });
+}
+api("/api/strategies").then((list) => {
+  for (const select of document.querySelectorAll("select.strategies")) {
+    for (const name of Object.keys(list)) select.add(new Option(name, name));
+  }
+}).catch((e) => { document.body.insertAdjacentHTML("afterbegin", `<p class="error">${esc(e.message)}</p>`); });
+</script>
+</body>
+</html>
