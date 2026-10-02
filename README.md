@@ -243,6 +243,15 @@ Uygulama bir erişim anahtarıyla açılır. Adresteki `?token=...` bir kez kull
 - Android: Chrome menüsü → Uygulamayı yükle.
 - Masaüstü (Chrome/Edge): adres çubuğundaki yükle simgesi.
 
+**Windows:** [uv](https://docs.astral.sh/uv/) ve cloudflared'ı kurun (`winget install astral-sh.uv` ve `winget install --id Cloudflare.cloudflared`), sonra PowerShell'de:
+
+```powershell
+uv sync
+.venv\Scripts\Activate.ps1
+$env:OPENROUTER_API_KEY = "sk-or-..."      # isteğe bağlı; Ayarlar'dan da girilebilir
+powershell -ExecutionPolicy Bypass -File scripts\tunnel.ps1          # ya da sonuna --demo
+```
+
 `scripts/tunnel.sh` için [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) kurulu olmalıdır. Betik geçici bir `https://<rastgele>.trycloudflare.com` adresi açar ve anahtarla birlikte tam adresi yazdırır. Adresi bilen herkes uygulamaya erişebileceği için paylaşmayın. Tünel, betik çalıştığı sürece açık kalır.
 
 Arayüzün yönettiği paper hesap `web` adını taşır (demo modunda `demo`). Komut satırından `marketalyzer-paper --account web status` ile de görülebilir. Uygulama ikonları `scripts/make_icons.py` ile yeniden üretilebilir. Yazı tipleri (Geist, Geist Mono, Doto) SIL Open Font License ile `web/static/fonts/` altında birlikte gelir, böylece uygulama çevrimdışı da aynı görünür.
