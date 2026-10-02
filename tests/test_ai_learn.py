@@ -68,3 +68,34 @@ def test_views_carry_strategy_context_from_before_the_test():
     assert first["strateji_gecmisi"]["islem"] > 0
     # The track record uses only bars before the test, so the end changes nothing.
     assert first["strateji_gecmisi"] == json.loads(long.views[0])["strateji_gecmisi"]
+
+
+# --- Lockstep walk -----------------------------------------------------------------
+
+
+def test_symbol_order_does_not_change_results():
+    a = blind.run_blind(
+        config(symbols=["THYAO", "GARAN"]), Decider("k", "m", complete=RuleModel())
+    )
+    b = blind.run_blind(
+        config(symbols=["GARAN", "THYAO"]), Decider("k", "m", complete=RuleModel())
+    )
+
+    def key(d):
+        return d["time"], d["symbol"]
+
+    assert sorted(a["decisions"], key=key) == sorted(b["decisions"], key=key)
+    assert a["ai"]["return_pct"] == b["ai"]["return_pct"]
+    assert a["ai"]["trades"] == b["ai"]["trades"] > 0
+
+
+def test_signals_only_run_matches_the_ai_following_every_signal():
+    def follow(api_key, model, messages, **kwargs):
+        if messages[0]["content"] == learn.BRIEF_SYSTEM:
+            return answer_text('{"tur": "trend", "ozet": "Kesişimde alır."}')
+        holding = json.loads(messages[1]["content"])["pozisyon"]["durum"] == "var"
+        return answer_text(json.dumps({"karar": "SAT" if holding else "AL"}))
+
+    result = blind.run_blind(config(), Decider("k", "m", complete=follow))
+    assert result["ai"]["trades"] == result["signals"]["trades"]
+    assert result["ai"]["return_pct"] == result["signals"]["return_pct"]

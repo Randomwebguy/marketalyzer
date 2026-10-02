@@ -189,6 +189,7 @@ class Simulation:
         cancelled: Callable[[], bool] = lambda: False,
         script: Script | None = None,
         strategy: dict[str, Any] | None = None,
+        codes: list[str] | None = None,
     ):
         self.data = data
         self.config = config
@@ -198,9 +199,12 @@ class Simulation:
         self.cancelled = cancelled
         self.script = script
         self.strategy = strategy
+        # Every ticker of the test: none may appear in a view.
+        self.codes = codes or [data.code]
         self.account = _Account(cash=allocation)
         self.allocation = allocation
         self.trades: list[dict[str, Any]] = []
+        self.trade_bars: list[tuple[int, int]] = []  # (entry bar, exit bar)
         self.decisions: list[dict[str, Any]] = []
         self.equity: list[tuple[Any, float]] = []
         self.exposure = 0
@@ -248,6 +252,7 @@ class Simulation:
                 "confidence": account.entry_note.get("confidence"),
             }
         )
+        self.trade_bars.append((account.entry_bar, i))
         account.qty = 0
         account.stop = account.limit = math.nan
 
@@ -296,7 +301,9 @@ class Simulation:
 
     # Decisions --------------------------------------------------------------------
 
-    def _view(self, i: int, event: str) -> tuple[dict[str, Any], Any]:
+    def _view(
+        self, i: int, event: str, journal: dict[str, Any] | None = None
+    ) -> tuple[dict[str, Any], Any]:
         """Build the decision snapshot from the bars up to ``i`` only."""
         frame = self.data.frame
         cut = frame.iloc[: i + 1]
@@ -325,14 +332,15 @@ class Simulation:
             position=position,
             training=self.data.training,
             strategy=self.strategy,
+            journal=journal,
         )
         return view, result
 
     def _leaks(self, view: dict[str, Any]) -> bool:
-        """Check that the snapshot names neither the stock nor a date."""
+        """Check that the snapshot names no stock of the test and no date."""
         text = json.dumps(view, ensure_ascii=False)
-        ticker = re.compile(rf"\b{re.escape(self.data.code)}\b")
-        return bool(ticker.search(text) or _DATE.search(text))
+        tickers = "|".join(re.escape(code) for code in self.codes)
+        return bool(re.search(rf"\b(?:{tickers})\b", text) or _DATE.search(text))
 
     def _event(self, i: int, entries: np.ndarray, exits: np.ndarray) -> str | None:
         account = self.account
@@ -351,11 +359,15 @@ class Simulation:
             return "review"
         return None
 
-    def _decision(self, i: int, event: str) -> str | None:
-        """Return "buy", "sell" or None for an event on bar ``i``."""
-        if self.decide is None:
-            return {"entry": "buy", "exit": "sell"}.get(event)
-        view, cut_result = self._view(i, event)
+    def prepare(
+        self, i: int, event: str, journal: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        """Return the view for a decision on bar ``i``, or None if none is due.
+
+        None means the signal was different on the cut data (a script that
+        looked ahead) or the view named a stock or a date.
+        """
+        view, cut_result = self._view(i, event, journal)
         if event in ("entry", "exit"):
             flags = cut_result.entries if event == "entry" else cut_result.exits
             full = (
@@ -367,7 +379,12 @@ class Simulation:
         if self._leaks(view):
             self.audit["leaks"] += 1
             return None
-        decision = self.decide(view)
+        return view
+
+    def record(
+        self, i: int, event: str, view: dict[str, Any], decision: Any
+    ) -> str | None:
+        """Keep the decision; return "buy", "sell" or None."""
         self.audit["decisions"] += 1
         record = {
             "bar": i,
@@ -388,43 +405,127 @@ class Simulation:
 
     # Run --------------------------------------------------------------------------
 
-    def run(self) -> Simulation:
-        """Walk the test bars; return self with trades, decisions and equity."""
-        frame, account = self.data.frame, self.account
+    def begin(self) -> None:
+        """Prepare the walk: the signal edges and the bar of each test date."""
+        frame = self.data.frame
         n = len(frame)
-        entries = _edges(self.data.result.entries, n)
-        exits = _edges(self.data.result.exits, n)
-        close = frame["Close"].to_numpy(dtype=float)
-        high = frame["High"].to_numpy(dtype=float)
-        pending: tuple[str, dict[str, Any]] | None = None
-        for i in range(self.data.first, n):
-            if self.cancelled():
-                raise Cancelled
-            if pending:
-                action, note = pending
-                if action == "buy" and not account.qty:
-                    self._buy(i, note)
-                elif action == "sell" and account.qty:
-                    self._sell(i, float(frame["Open"].iloc[i]), "sinyal")
-                pending = None
-            if account.qty:
-                self._exits_inside_bar(i)
-            if account.qty:
-                account.peak = max(account.peak, high[i])
-                self.exposure += 1
-                self._set_levels(i)
-            if i < n - 1:  # A decision on the last bar could not be filled.
-                event = self._event(i, entries, exits)
-                if event and len(self.decisions) < MAX_DECISIONS:
-                    action = self._decision(i, event)
-                    if action:
-                        note = self.decisions[-1] if self.decide else {}
-                        pending = (action, note)
-            self.equity.append((frame.index[i], account.cash + account.qty * close[i]))
+        self._entries = _edges(self.data.result.entries, n)
+        self._exits = _edges(self.data.result.exits, n)
+        self._close = frame["Close"].to_numpy(dtype=float)
+        self._high = frame["High"].to_numpy(dtype=float)
+        self.dates = {frame.index[i]: i for i in range(self.data.first, n)}
+        self.pending = None
+
+    def step(self, i: int) -> str | None:
+        """Trade bar ``i`` up to its close; return the event to decide on, if any.
+
+        The order queued at the previous close fills at this open, then the
+        stop and the target are checked inside the bar.
+        """
+        frame, account = self.data.frame, self.account
+        if self.pending:
+            action, note = self.pending
+            if action == "buy" and not account.qty:
+                self._buy(i, note)
+            elif action == "sell" and account.qty:
+                self._sell(i, float(frame["Open"].iloc[i]), "sinyal")
+            self.pending = None
         if account.qty:
-            self._sell(n - 1, close[n - 1], "dönem sonu (açık)")
+            self._exits_inside_bar(i)
+        if account.qty:
+            account.peak = max(account.peak, self._high[i])
+            self.exposure += 1
+            self._set_levels(i)
+        self.equity.append(
+            (frame.index[i], account.cash + account.qty * self._close[i])
+        )
+        if i >= len(frame) - 1:  # A decision on the last bar could not be filled.
+            return None
+        event = self._event(i, self._entries, self._exits)
+        if event and len(self.decisions) < MAX_DECISIONS:
+            return event
+        return None
+
+    def queue(self, action: str | None, note: dict[str, Any]) -> None:
+        """Fill ``action`` ("buy" or "sell") at the next bar's open."""
+        if action:
+            self.pending = (action, note)
+
+    def finish(self, reason: str = "dönem sonu (açık)") -> Simulation:
+        """Close a position still open at the last bar's close."""
+        n = len(self.data.frame)
+        if self.account.qty:
+            self._sell(n - 1, self._close[n - 1], reason)
             self.trades[-1]["open"] = True
         return self
+
+    def run(self) -> Simulation:
+        """Walk the test bars alone; return self with trades, decisions, equity."""
+        _walk([self], cancelled=self.cancelled)
+        return self
+
+
+def _walk(
+    sims: list[Simulation], *, cancelled: Callable[[], bool] = lambda: False
+) -> None:
+    """Walk the simulations together, one date at a time.
+
+    On each date every symbol trading that day steps to its close; then the
+    decisions due that day are asked in parallel (each on its own cut data)
+    and their orders queued for the next open. Signals-only simulations
+    follow the signals.
+    """
+    for sim in sims:
+        sim.begin()
+    calendar = sorted(set().union(*(sim.dates for sim in sims)))
+    asking = any(sim.decide for sim in sims)
+    pool = ThreadPoolExecutor(max_workers=min(4, len(sims))) if asking else None
+    try:
+        for when in calendar:
+            if cancelled():
+                raise Cancelled
+            due = _step_day(sims, when)
+            if due:
+                _ask_day(pool, due)
+    finally:
+        if pool:
+            pool.shutdown()
+    for sim in sims:
+        sim.finish()
+
+
+def _step_day(sims: list[Simulation], when: Any) -> list[tuple[Simulation, int, str]]:
+    """Step every symbol trading on ``when``; return the decisions due.
+
+    Signals-only simulations follow their signal at once.
+    """
+    due = []
+    for sim in sims:
+        i = sim.dates.get(when)
+        if i is None:
+            continue
+        event = sim.step(i)
+        if event is None:
+            continue
+        if sim.decide is None:
+            sim.queue({"entry": "buy", "exit": "sell"}.get(event), {})
+        else:
+            due.append((sim, i, event))
+    return due
+
+
+def _ask_day(pool: ThreadPoolExecutor, due: list[tuple[Simulation, int, str]]) -> None:
+    """Ask the day's decisions in parallel; record them and queue the orders."""
+
+    def ask(item: tuple[Simulation, int, str]) -> tuple[Any, Any]:
+        sim, i, event = item
+        view = sim.prepare(i, event)
+        return view, (sim.decide(view) if view is not None else None)
+
+    for (sim, i, event), (view, decision) in zip(due, pool.map(ask, due)):
+        if view is not None:
+            action = sim.record(i, event, view, decision)
+            sim.queue(action, sim.decisions[-1])
 
 
 # --- Results ----------------------------------------------------------------------
@@ -712,8 +813,9 @@ def run_blind(
                 }
             )
 
-        def one(d: Data) -> Simulation:
-            return Simulation(
+        codes = [d.code for d in data]
+        ai_sims = [
+            Simulation(
                 d,
                 config,
                 allocation,
@@ -723,10 +825,11 @@ def run_blind(
                 cancelled=cancelled,
                 script=script,
                 strategy=strategy,
-            ).run()
-
-        with ThreadPoolExecutor(max_workers=min(4, len(data))) as pool:
-            ai_sims = list(pool.map(one, data))
+                codes=codes,
+            )
+            for d in data
+        ]
+        _walk(ai_sims, cancelled=cancelled)
     emit({"type": "stage", "stage": "summary", "message": "Sonuçlar hesaplanıyor"})
     result = summarize(config, data, benchmark, signal_sims, ai_sims, model)
     if strategy:
