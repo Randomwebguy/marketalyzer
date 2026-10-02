@@ -60,6 +60,7 @@ class BacktestReport:
     backtest: Backtest = field(repr=False)
     symbol: str | None = None
     context: dict[str, Any] = field(default_factory=dict)
+    data: pd.DataFrame | None = field(default=None, repr=False)
 
     @property
     def trades(self) -> pd.DataFrame:
@@ -237,6 +238,7 @@ def _report(
         backtest=backtest,
         symbol=symbol,
         context=context,
+        data=data,
     )
 
 

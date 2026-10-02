@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d0d">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="marketalyzer">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/static/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="/static/app.css">
+<title>marketalyzer</title>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><img src="/static/icons/icon-192.png" alt="">marketalyzer</div>
+    <nav class="nav" id="nav"></nav>
+    <div class="sidebar-foot">
+      <div class="label">Sanal hesap</div>
+      <div class="value" id="side-equity">—</div>
+      <div class="label">Gerçek para kullanılmaz</div>
+    </div>
+  </aside>
+  <div class="main">
+    <header class="topbar">
+      <div class="title">
+        <h1 id="page-title">Panel</h1>
+        <p id="page-sub"></p>
+      </div>
+      <form class="search" id="search" role="search">
+        <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input name="symbol" placeholder="Sembol ara, ör. THYAO" autocomplete="off" spellcheck="false" maxlength="12" aria-label="Sembol ara">
+      </form>
+      <button class="icon-btn" id="refresh" type="button" title="Yenile" aria-label="Yenile">
+        <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
+      </button>
+    </header>
+    <div class="demo-banner" id="demo-banner" hidden>Demo modu: fiyatlar sentetiktir, gerçek piyasa verisi değildir.</div>
+    <main id="view"></main>
+  </div>
+  <nav class="tabbar" id="tabbar"></nav>
+</div>
+<div id="toast" role="status" aria-live="polite"></div>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

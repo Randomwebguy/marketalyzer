@@ -10,7 +10,7 @@ Borsa İstanbul (BIST) üzerinde yapay zeka destekli strateji denemeleri için b
 providers/bist/          openbb-bist: OpenBB ODP V5 için BIST veri sağlayıcısı
 marketalyzer/backtest/   backtesting.py üzerine kurulu BIST backtest motoru
 marketalyzer/paper/      sanal hesapla paper trading simülatörü
-marketalyzer/web/        tarayıcı arayüzü (FastAPI)
+marketalyzer/web/        web uygulaması (FastAPI + kurulabilir PWA)
 scripts/tunnel.sh        arayüzü Cloudflare tüneliyle yayınlama
 tests/                   backtest ve paper trading testleri
 ```
@@ -175,18 +175,33 @@ marketalyzer-paper walkforward THYAO -s sma_cross --start 2018-01-01 --train 504
 - Temettüler yalnızca günlük barlarla (`--interval 1d`) nakit olarak ödenir; varsayılan stopaj oranı %15'tir (`--dividend-tax`, güncel oranı kontrol edin). Dakikalık barlarda temettü yansımaz.
 - Bölünme ve bedelsiz sermaye artırımlarında replay, bölünmeye göre düzeltilmiş fiyatlarla çalıştığı için sonuç tutarlıdır. Canlı çalışan bir hesapta ise bölünme günü pozisyon adedi değişmez; bunu elle düzeltmek gerekir.
 
-## Web arayüzü ve Cloudflare tüneli
+## Web uygulaması ve Cloudflare tüneli
 
-Backtest, walk-forward ve paper hesap ekranları tarayıcıdan, telefondan da kullanılabilir.
+Karanlık temalı, uygulama hissi veren bir arayüz. Masaüstünde kenar çubuğu ve kart (widget) ızgarası, telefonda alt sekme çubuğu kullanılır. Dört bölümden oluşur:
+
+- **Panel:** toplam varlık ve özsermaye grafiği, K/Z kutuları, portföy dağılımı, mini grafikli izleme listesi, mum grafiği (1 gün – 5 yıl), pozisyonlar ve son işlemler.
+- **İşlem:** al/sat emri (piyasa, limit, stop; fiyat adımı kontrolü ve tahmini maliyetle), açık ve geçmiş emirler, "veriyi işle" ve hesap ayarları.
+- **Backtest:** strateji seçimi ve parametreleri, optimizasyon, strateji ile al-tut karşılaştırma grafiği, XU100 ve USD bazında getiri, işlem listesi.
+- **Walk-forward:** pencere pencere ileriye dönük test ve sonuçları.
 
 ```sh
 marketalyzer-web                 # http://127.0.0.1:8000/?token=... adresini yazdırır
-scripts/tunnel.sh                # arayüzü başlatır ve Cloudflare tüneliyle yayınlar
+marketalyzer-web --demo          # internetsiz deneme: sentetik fiyatlar, ayrı "demo" hesabı
+scripts/tunnel.sh                # uygulamayı başlatır ve Cloudflare tüneliyle yayınlar
 ```
 
-`scripts/tunnel.sh` için [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) kurulu olmalıdır. Betik geçici bir `https://<rastgele>.trycloudflare.com` adresi açar ve erişim anahtarıyla birlikte tam adresi yazdırır. Uygulama yalnızca bu anahtarla açılır; adresi bilen herkes arayüze erişebileceği için paylaşmayın. Sabit bir anahtar için `MARKETALYZER_TOKEN` ortam değişkeni kullanılabilir. Tünel, betik çalıştığı sürece açık kalır.
+Uygulama bir erişim anahtarıyla açılır. Adresteki `?token=...` bir kez kullanıldığında ya da giriş sayfasına anahtar yazıldığında tarayıcı onu 30 gün hatırlar. Sabit bir anahtar için `MARKETALYZER_TOKEN` ortam değişkeni kullanılabilir.
 
-Arayüzün yönettiği paper hesap `web` adını taşır; `marketalyzer-paper --account web status` ile komut satırından da görülebilir.
+**Uygulama olarak kurma (PWA):** tünel adresi HTTPS olduğu için uygulama telefona ve masaüstüne kurulabilir.
+- iPhone: Safari'de Paylaş → Ana Ekrana Ekle. Ana ekrandan ilk açılışta erişim anahtarını bir kez girin; ana ekran uygulamaları Safari'nin çerezlerini paylaşmaz.
+- Android: Chrome menüsü → Uygulamayı yükle.
+- Masaüstü (Chrome/Edge): adres çubuğundaki yükle simgesi.
+
+`scripts/tunnel.sh` için [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) kurulu olmalıdır. Betik geçici bir `https://<rastgele>.trycloudflare.com` adresi açar ve anahtarla birlikte tam adresi yazdırır. Adresi bilen herkes uygulamaya erişebileceği için paylaşmayın. Tünel, betik çalıştığı sürece açık kalır.
+
+Arayüzün yönettiği paper hesap `web` adını taşır (demo modunda `demo`). Komut satırından `marketalyzer-paper --account web status` ile de görülebilir. Uygulama ikonları `scripts/make_icons.py` ile yeniden üretilebilir.
+
+Grafik renkleri, renk körlüğüne karşı doğrulanmış bir paletten seçildi. Yükseliş ve düşüş, renge ek olarak ▲/▼ işaretleri ve içi boş/dolu mumlarla da ayırt edilir. Her grafiğin bir tablo görünümü vardır. Saatler cihazın saat diliminden bağımsız olarak İstanbul saatiyle gösterilir.
 
 ## Geliştirme
 
