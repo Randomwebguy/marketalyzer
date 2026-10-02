@@ -41,6 +41,7 @@ from marketalyzer.ai.conversations import (
 )
 from marketalyzer.ai.jobs import JobError, JobRunner
 from marketalyzer.ai.openrouter import (
+    FalKey,
     OpenRouterError,
     key_info,
     list_models,
@@ -170,13 +171,20 @@ class ScreenRequest(BaseModel):
 
 
 class AISettingsRequest(BaseModel):
-    """Changes to the assistant settings; omitted fields stay as they are."""
+    """Changes to the assistant settings; omitted fields stay as they are.
 
+    ``api_key`` is the OpenRouter key and ``fal_key`` the fal.ai key;
+    ``provider`` chooses which one the assistant and the lab use.
+    """
+
+    provider: Literal["openrouter", "fal"] | None = None
     api_key: str | None = Field(None, max_length=200)
+    fal_key: str | None = Field(None, max_length=200)
     model: str | None = Field(None, max_length=200)
     decision_model: str | None = Field(None, max_length=200)
     allow_trading: bool | None = None
     clear_key: bool = False
+    clear_fal_key: bool = False
 
 
 class StudyRequest(BaseModel):
@@ -643,8 +651,12 @@ def create_app(
     @app.post("/api/ai/settings")
     def ai_settings_save(request: AISettingsRequest) -> dict[str, Any]:
         changes: dict[str, Any] = {}
+        if request.provider:
+            changes["provider"] = request.provider
         if request.api_key:
             changes["api_key"] = request.api_key
+        if request.fal_key:
+            changes["fal_key"] = request.fal_key
         if request.model is not None:
             changes["model"] = request.model
         if request.allow_trading is not None:
@@ -652,7 +664,11 @@ def create_app(
         if request.decision_model is not None:
             changes["decision_model"] = request.decision_model
         try:
-            settings = save_settings(**changes, clear_key=request.clear_key)
+            settings = save_settings(
+                **changes,
+                clear_key=request.clear_key,
+                clear_fal_key=request.clear_fal_key,
+            )
         except ValueError as error:
             raise _fail(error) from error
         return public_settings(settings)
@@ -670,8 +686,16 @@ def create_app(
     def ai_test() -> dict[str, Any]:
         settings = load_settings()
         if not settings.api_key:
-            raise HTTPException(400, "Önce bir OpenRouter API anahtarı kaydedin.")
+            raise HTTPException(400, "Önce seçili sağlayıcı için bir API anahtarı kaydedin.")
         try:
+            if isinstance(settings.api_key, FalKey):
+                # fal.ai has no key endpoint: ask the cheapest fast model for one token.
+                try:
+                    models = list_models(settings.api_key)
+                except OpenRouterError:
+                    models = None
+                model, _ = decide.resolve_model("gemini-flash-lite", models)
+                return {"ok": True, **key_info(settings.api_key, model=model)}
             return {"ok": True, **key_info(settings.api_key)}
         except OpenRouterError as error:
             raise HTTPException(502, error.message) from error
@@ -759,8 +783,8 @@ def create_app(
         if not settings.api_key:
             raise HTTPException(
                 400,
-                "OpenRouter API anahtarı ayarlanmamış. Ayarlar > Yapay zeka bölümünden"
-                " anahtarınızı ekleyin.",
+                "API anahtarı ayarlanmamış. Ayarlar > Yapay zeka bölümünden OpenRouter"
+                " ya da fal.ai anahtarınızı ekleyin.",
             )
         return settings.api_key
 

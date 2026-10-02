@@ -6,10 +6,13 @@ import requests
 
 from marketalyzer.ai import openrouter
 from marketalyzer.ai.openrouter import (
+    FalKey,
     OpenRouterError,
+    complete_chat,
     key_info,
     list_models,
     pick_default_model,
+    provider_of,
     stream_chat,
 )
 
@@ -368,6 +371,7 @@ def test_key_info(fake_send):
     }
     fake_send.responses.append(FakeResponse(body=body))
     assert key_info("k") == {
+        "provider": "openrouter",
         "label": "sk-or-v1-abc...xyz",
         "usage": 1.25,
         "limit": None,
@@ -423,3 +427,95 @@ def test_pick_default_model():
     )
     assert pick_default_model(models("a/b", tools=False)) is None
     assert pick_default_model([]) is None
+
+
+FAL = FalKey("fal_sk_0123:abcdef")
+FAL_CHAT = "https://fal.run/openrouter/router/openai/v1/chat/completions"
+
+
+def test_fal_key_streams_through_fal(fake_send):
+    fake_send.responses.append(
+        FakeResponse(lines=sse(delta(content="Merhaba"), finish("stop"), USAGE))
+    )
+    events = list(stream_chat(FAL, "a/b", [{"role": "user", "content": "selam"}]))
+    assert events[0] == {"type": "text", "text": "Merhaba"}
+    assert events[-1]["cost"] == 0.00042
+    (call,) = fake_send.calls
+    assert call.url == FAL_CHAT
+    assert call.headers["Authorization"] == "Key fal_sk_0123:abcdef"
+    assert call.json["model"] == "a/b"
+
+
+def test_fal_key_completes_through_fal(fake_send):
+    body = {
+        "model": "a/b",
+        "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 7, "completion_tokens": 1, "cost": 1.1e-06},
+    }
+    fake_send.responses.append(FakeResponse(body=body))
+    result = complete_chat(FAL, "a/b", [{"role": "user", "content": "selam"}])
+    assert result["text"] == "OK"
+    assert result["usage"]["cost"] == 1.1e-06
+    (call,) = fake_send.calls
+    assert call.url == FAL_CHAT
+    assert call.headers["Authorization"] == "Key fal_sk_0123:abcdef"
+
+
+def test_fal_models_come_from_openrouters_public_list(fake_send):
+    # fal.ai lists no models; it serves OpenRouter's model ids.
+    fake_send.responses.append(FakeResponse(body=MODELS))
+    assert len(list_models(FAL)) == 3
+    (call,) = fake_send.calls
+    assert call.url == "https://openrouter.ai/api/v1/models"
+    assert "Authorization" not in call.headers
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "expected"),
+    [
+        (401, {"detail": "invalid key credentials"}, "fal.ai API anahtarı geçersiz"),
+        (402, {"detail": "insufficient balance"}, "fal.ai bakiyesi yetersiz"),
+        (500, {"detail": "boom"}, "fal.ai veya model sağlayıcısı"),
+    ],
+)
+def test_fal_errors_name_fal(fake_send, status, body, expected):
+    fake_send.responses.append(FakeResponse(status=status, body=body))
+    with pytest.raises(OpenRouterError, match=expected) as raised:
+        list(stream_chat(FAL, "a/b", []))
+    assert raised.value.status == status
+    assert body["detail"] in raised.value.message
+    assert "OpenRouter" not in raised.value.message
+
+
+def test_fal_network_errors_name_fal(monkeypatch):
+    def request(*args, **kwargs):
+        raise requests.ConnectionError("refused")
+
+    monkeypatch.setattr(openrouter.requests, "request", request)
+    with pytest.raises(OpenRouterError, match="fal.ai'a bağlanılamadı"):
+        list(stream_chat(FAL, "a/b", []))
+
+
+def test_fal_key_info_runs_a_one_token_completion(fake_send):
+    body = {
+        "model": "google/gemini-9-flash-lite",
+        "choices": [{"message": {"content": "O"}, "finish_reason": "length"}],
+        "usage": {"prompt_tokens": 7, "completion_tokens": 1, "cost": 1.1e-06},
+    }
+    fake_send.responses.append(FakeResponse(body=body))
+    assert key_info(FAL, model="google/gemini-9-flash-lite") == {
+        "provider": "fal",
+        "label": "fal.ai",
+        "model": "google/gemini-9-flash-lite",
+        "cost": 1.1e-06,
+    }
+    (call,) = fake_send.calls
+    assert call.url == FAL_CHAT
+    assert call.json["max_tokens"] == 1
+    assert call.json["model"] == "google/gemini-9-flash-lite"
+
+
+def test_provider_of_a_key():
+    assert provider_of(FAL) == "fal"
+    assert provider_of("sk-or-v1-abc") == "openrouter"
+    assert provider_of(None) == "openrouter"

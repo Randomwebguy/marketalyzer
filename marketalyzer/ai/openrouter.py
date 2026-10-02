@@ -1,4 +1,10 @@
-"""A small client for OpenRouter's OpenAI-compatible API.
+"""A small client for OpenRouter's OpenAI-compatible API, direct or through fal.ai.
+
+fal.ai serves the same API and model ids at its own address and bills its own
+account. A ``FalKey`` carries that choice: callers pass the key around as
+before and only this module picks the address and the authorization header.
+fal.ai lists no models and has no key endpoint, so the model list comes from
+OpenRouter's public list and a fal.ai key is checked with a one-token answer.
 
 Every HTTP request goes through ``_send``, so tests replace that one function.
 Errors become ``OpenRouterError`` with a Turkish message for the UI.
@@ -14,6 +20,9 @@ from typing import Any
 import requests
 
 BASE_URL = "https://openrouter.ai/api/v1"
+FAL_BASE_URL = "https://fal.run/openrouter/router/openai/v1"
+# A cheap, fast model for checking a fal.ai key when none is given.
+FAL_CHECK_MODEL = "google/gemini-2.5-flash-lite"
 REFERER = "https://github.com/randomwebguy/marketalyzer"
 TITLE = "marketalyzer"
 MODELS_TTL = 3600.0
@@ -49,15 +58,38 @@ class OpenRouterError(Exception):
         self.status = status
 
 
-# Messages for HTTP statuses that need no further detail.
+class FalKey(str):
+    """A fal.ai key: requests go to fal.ai's OpenRouter-compatible address."""
+
+
+NAMES = {"openrouter": "OpenRouter", "fal": "fal.ai"}
+TOP_UP = {
+    "OpenRouter": "openrouter.ai üzerinden kredi yükleyin veya ücretsiz bir model seçin",
+    "fal.ai": "fal.ai/dashboard/billing üzerinden kredi yükleyin",
+}
+
+
+def provider_of(api_key: str | None) -> str:
+    """Return the provider a key belongs to: "fal" or "openrouter"."""
+    return "fal" if isinstance(api_key, FalKey) else "openrouter"
+
+
+def _name(api_key: str | None) -> str:
+    return NAMES[provider_of(api_key)]
+
+
+def _base_url(api_key: str | None) -> str:
+    return FAL_BASE_URL if isinstance(api_key, FalKey) else BASE_URL
+
+
+# Messages for HTTP statuses that need no further detail; {name} is the provider.
 STATUS_MESSAGES = {
-    401: "OpenRouter API anahtarı geçersiz veya iptal edilmiş. Ayarlar'dan"
+    401: "{name} API anahtarı geçersiz veya iptal edilmiş. Ayarlar'dan"
     " anahtarı kontrol edin.",
-    402: "OpenRouter bakiyesi yetersiz. openrouter.ai üzerinden kredi yükleyin"
-    " veya ücretsiz bir model seçin.",
-    403: "İstek OpenRouter tarafından reddedildi (içerik denetimi veya erişim izni).",
-    408: "OpenRouter isteği zaman aşımına uğradı. Biraz sonra tekrar deneyin.",
-    429: "OpenRouter istek limitine ulaşıldı. Biraz sonra tekrar deneyin.",
+    402: "{name} bakiyesi yetersiz. {top_up}.",
+    403: "İstek {name} tarafından reddedildi (içerik denetimi veya erişim izni).",
+    408: "{name} isteği zaman aşımına uğradı. Biraz sonra tekrar deneyin.",
+    429: "{name} istek limitine ulaşıldı. Biraz sonra tekrar deneyin.",
 }
 NO_TOOLS = (
     "Seçilen model araç kullanımını (tool calling) desteklemiyor. Ayarlar'dan"
@@ -67,49 +99,51 @@ NO_MODEL = (
     "Seçilen model bulunamadı veya desteklenmiyor. Ayarlar'dan başka bir model seçin."
 )
 PROVIDER_DOWN = (
-    "OpenRouter veya model sağlayıcısı geçici bir hata verdi. Biraz sonra tekrar"
+    "{name} veya model sağlayıcısı geçici bir hata verdi. Biraz sonra tekrar"
     " deneyin ya da başka bir model seçin."
 )
 
 
-def _base_message(status: int | None, detail: str) -> str:
+def _base_message(status: int | None, detail: str, name: str) -> str:
     text = detail.lower()
     if status == 404 and "tool" in text:
         return NO_TOOLS  # "No endpoints found that support tool use."
     if status in (400, 404) and ("model" in text or "endpoint" in text):
         return NO_MODEL
     if status is not None and status >= 500:
-        return PROVIDER_DOWN
+        return PROVIDER_DOWN.format(name=name)
     if status is None:
-        return "OpenRouter bir hata bildirdi."
-    default = f"OpenRouter isteği başarısız oldu (HTTP {status})."
-    return STATUS_MESSAGES.get(status, default)
+        return f"{name} bir hata bildirdi."
+    default = f"{name} isteği başarısız oldu (HTTP {status})."
+    return STATUS_MESSAGES.get(status, default).format(name=name, top_up=TOP_UP[name])
 
 
-def api_error(status: int | None, detail: str | None = None) -> OpenRouterError:
+def api_error(
+    status: int | None, detail: str | None = None, name: str = "OpenRouter"
+) -> OpenRouterError:
     """Build the error for an HTTP status and the provider's own error text."""
     detail = " ".join((detail or "").split())[:MAX_DETAIL]
-    message = _base_message(status, detail)
+    message = _base_message(status, detail, name)
     if detail:
         message = f"{message} ({detail})"
     return OpenRouterError(message, status)
 
 
-def _network_error(error: requests.RequestException) -> OpenRouterError:
+def _network_error(error: requests.RequestException, name: str) -> OpenRouterError:
     if isinstance(error, requests.Timeout):
         return OpenRouterError(
-            "OpenRouter yanıt vermedi (zaman aşımı). Biraz sonra tekrar deneyin."
+            f"{name} yanıt vermedi (zaman aşımı). Biraz sonra tekrar deneyin."
         )
     if isinstance(error, requests.exceptions.ChunkedEncodingError):
         return OpenRouterError(
-            "OpenRouter bağlantısı yanıt sırasında koptu. Tekrar deneyin."
+            f"{name} bağlantısı yanıt sırasında koptu. Tekrar deneyin."
         )
     if isinstance(error, requests.ConnectionError):
         return OpenRouterError(
-            "OpenRouter'a bağlanılamadı. İnternet bağlantınızı veya ağ erişimini"
+            f"{name}'a bağlanılamadı. İnternet bağlantınızı veya ağ erişimini"
             " (güvenlik duvarı, proxy) kontrol edin."
         )
-    return OpenRouterError(f"OpenRouter isteği başarısız oldu: {type(error).__name__}.")
+    return OpenRouterError(f"{name} isteği başarısız oldu: {type(error).__name__}.")
 
 
 def _headers(api_key: str | None) -> dict[str, str]:
@@ -118,7 +152,9 @@ def _headers(api_key: str | None) -> dict[str, str]:
         "X-Title": TITLE,
         "Content-Type": "application/json",
     }
-    if api_key:
+    if isinstance(api_key, FalKey):
+        headers["Authorization"] = f"Key {api_key}"
+    elif api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
 
@@ -138,21 +174,31 @@ def _send(
             method, url, headers=headers, json=json, stream=stream, timeout=timeout
         )
     except requests.RequestException as error:
-        raise _network_error(error) from error
+        name = NAMES["fal"] if url.startswith(FAL_BASE_URL) else NAMES["openrouter"]
+        raise _network_error(error, name) from error
 
 
 def _error_detail(body: Any) -> tuple[Any, str | None]:
-    """Return the code and message of an OpenRouter error body."""
-    error = body.get("error") if isinstance(body, dict) else None
+    """Return the code and message of an error body.
+
+    OpenRouter sends ``{"error": {"code", "message"}}``; fal.ai's own errors,
+    such as a wrong key, are ``{"detail": "..."}``.
+    """
+    if not isinstance(body, dict):
+        return None, None
+    error = body.get("error")
     if isinstance(error, dict):
         message = error.get("message")
         return error.get("code"), str(message) if message else None
     if isinstance(error, str):
         return None, error
+    detail = body.get("detail")
+    if isinstance(detail, str):
+        return None, detail
     return None, None
 
 
-def _check(response: requests.Response) -> None:
+def _check(response: requests.Response, name: str = "OpenRouter") -> None:
     """Raise OpenRouterError for a non-2xx response."""
     if 200 <= response.status_code < 300:
         return
@@ -163,10 +209,11 @@ def _check(response: requests.Response) -> None:
         body = {"error": text} if text and not text.startswith("<") else None
     finally:
         response.close()
-    raise api_error(response.status_code, _error_detail(body)[1])
+    raise api_error(response.status_code, _error_detail(body)[1], name)
 
 
 def _get(path: str, api_key: str | None) -> dict[str, Any]:
+    """GET from OpenRouter itself; fal.ai has no such endpoints."""
     response = _send("GET", f"{BASE_URL}{path}", headers=_headers(api_key))
     _check(response)
     try:
@@ -212,13 +259,16 @@ def list_models(
     Each model is ``{"id", "name", "context_length", "prompt_price",
     "completion_price", "tools", "json"}``: prices are USD per million tokens
     (None when unknown), ``tools`` tells whether the model supports tool calling
-    and ``json`` whether it can be asked for a JSON object.
+    and ``json`` whether it can be asked for a JSON object. A fal.ai key gets
+    the same public list, fetched without the key.
     """
     global _models_cache  # noqa: PLW0603
     with _models_lock:
         cached = _models_cache
     if not refresh and cached and time.monotonic() - cached[0] < MODELS_TTL:
         return [dict(model) for model in cached[1]]
+    if isinstance(api_key, FalKey):
+        api_key = None
     data = _get("/models", api_key).get("data") or []
     models = sorted(
         (_model(item) for item in data if isinstance(item, dict) and item.get("id")),
@@ -236,12 +286,27 @@ def clear_models_cache() -> None:
         _models_cache = None
 
 
-def key_info(api_key: str) -> dict[str, Any]:
-    """Check a key: return its ``label``, ``usage``, ``limit`` and ``is_free_tier``."""
+def key_info(api_key: str, model: str = FAL_CHECK_MODEL) -> dict[str, Any]:
+    """Check a key and return its ``provider`` and ``label``.
+
+    An OpenRouter key also returns its ``usage``, ``limit`` and
+    ``is_free_tier``. A fal.ai key, which has no such endpoint, is checked with a
+    one-token answer from ``model`` and returns that ``model`` and its ``cost``.
+    """
     if not api_key:
-        raise OpenRouterError("OpenRouter API anahtarı ayarlanmamış.")
+        raise OpenRouterError("API anahtarı ayarlanmamış.")
+    if isinstance(api_key, FalKey):
+        prompt = [{"role": "user", "content": "OK"}]
+        result = complete_chat(api_key, model, prompt, max_tokens=1)
+        return {
+            "provider": "fal",
+            "label": NAMES["fal"],
+            "model": result["model"],
+            "cost": result["usage"]["cost"],
+        }
     data = _get("/key", api_key).get("data") or {}
     return {
+        "provider": "openrouter",
         "label": data.get("label"),
         "usage": data.get("usage"),
         "limit": data.get("limit"),
@@ -303,24 +368,25 @@ def complete_chat(
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
     payload.update(extra or {})
+    name = _name(api_key)
     response = _send(
         "POST",
-        f"{BASE_URL}/chat/completions",
+        f"{_base_url(api_key)}/chat/completions",
         headers=_headers(api_key),
         json=payload,
         timeout=timeout,
     )
-    _check(response)
+    _check(response, name)
     try:
         body = response.json()
     except ValueError:
-        raise OpenRouterError("OpenRouter beklenmeyen bir yanıt döndürdü.") from None
+        raise OpenRouterError(f"{name} beklenmeyen bir yanıt döndürdü.") from None
     finally:
         response.close()
     if not isinstance(body, dict):
-        raise OpenRouterError("OpenRouter beklenmeyen bir yanıt döndürdü.")
+        raise OpenRouterError(f"{name} beklenmeyen bir yanıt döndürdü.")
     if body.get("error"):
-        raise _stream_error(body["error"])
+        raise _stream_error(body["error"], name)
     choice = (body.get("choices") or [{}])[0] or {}
     message = choice.get("message") or {}
     content = message.get("content") or ""
@@ -336,11 +402,11 @@ def complete_chat(
     }
 
 
-def _stream_error(error: Any) -> OpenRouterError:
+def _stream_error(error: Any, name: str = "OpenRouter") -> OpenRouterError:
     """Build the error for an ``error`` object inside a stream chunk."""
     code, message = _error_detail({"error": error})
     status = code if isinstance(code, int) else None
-    return api_error(status, message)
+    return api_error(status, message, name)
 
 
 def _tool_call_event(call: dict[str, Any]) -> dict[str, Any]:
@@ -357,10 +423,12 @@ def _tool_call_event(call: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _chunk_events(chunk: dict[str, Any]) -> Iterator[dict[str, Any]]:
+def _chunk_events(
+    chunk: dict[str, Any], name: str = "OpenRouter"
+) -> Iterator[dict[str, Any]]:
     """Turn one parsed stream chunk into events."""
     if chunk.get("error"):
-        raise _stream_error(chunk["error"])
+        raise _stream_error(chunk["error"], name)
     choices = chunk.get("choices") or []
     if choices:
         choice = choices[0]
@@ -429,15 +497,16 @@ def stream_chat(
         payload["temperature"] = temperature
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
+    name = _name(api_key)
     response = _send(
         "POST",
-        f"{BASE_URL}/chat/completions",
+        f"{_base_url(api_key)}/chat/completions",
         headers=_headers(api_key),
         json=payload,
         stream=True,
         timeout=STREAM_TIMEOUT,
     )
-    _check(response)
+    _check(response, name)
     try:
         for data in _sse_data(response.iter_lines()):
             try:
@@ -445,8 +514,8 @@ def stream_chat(
             except ValueError:
                 continue
             if isinstance(chunk, dict):
-                yield from _chunk_events(chunk)
+                yield from _chunk_events(chunk, name)
     except requests.RequestException as error:
-        raise _network_error(error) from error
+        raise _network_error(error, name) from error
     finally:
         response.close()

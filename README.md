@@ -11,7 +11,7 @@ providers/bist/          openbb-bist: OpenBB ODP V5 için BIST veri sağlayıcı
 marketalyzer/backtest/   backtesting.py üzerine kurulu BIST backtest motoru
 marketalyzer/paper/      sanal hesapla paper trading simülatörü
 marketalyzer/scripting/  TradingView Pine Script benzeri gösterge ve strateji dili
-marketalyzer/ai/         OpenRouter üzerinden çalışan, araç kullanan yapay zeka asistanı
+marketalyzer/ai/         OpenRouter ya da fal.ai üzerinden çalışan, araç kullanan yapay zeka asistanı
 marketalyzer/services.py web API'si ve asistan araçlarının ortak işlemleri
 marketalyzer/web/        web uygulaması (FastAPI + kurulabilir PWA)
 scripts/tunnel.sh        arayüzü Cloudflare tüneliyle yayınlama
@@ -205,14 +205,16 @@ if r > 70
 marketalyzer-backtest THYAO --strategy script:rsi_reversion --optimize
 ```
 
-## Yapay zeka asistanı (OpenRouter)
+## Yapay zeka asistanı (OpenRouter ya da fal.ai)
 
-Asistan, [OpenRouter](https://openrouter.ai) üzerinden seçtiğiniz modeli kullanır ve uygulamanın araçlarıyla çalışır: piyasa özeti, fiyatlar ve fiyat geçmişi, teknik analiz özeti, script yazma/doğrulama/kaydetme/çalıştırma, çok hisseli tarama, backtest, optimizasyon (holdout testiyle), walk-forward ve sanal hesap. Her sayıyı araçlardan alacak, aşırı uyum ve az işlem sayısı gibi riskleri belirtecek ve yatırım tavsiyesi vermeyecek şekilde yönlendirilir.
+Asistan, [OpenRouter](https://openrouter.ai) ya da [fal.ai](https://fal.ai) üzerinden seçtiğiniz modeli kullanır ve uygulamanın araçlarıyla çalışır: piyasa özeti, fiyatlar ve fiyat geçmişi, teknik analiz özeti, script yazma/doğrulama/kaydetme/çalıştırma, çok hisseli tarama, backtest, optimizasyon (holdout testiyle), walk-forward ve sanal hesap. Her sayıyı araçlardan alacak, aşırı uyum ve az işlem sayısı gibi riskleri belirtecek ve yatırım tavsiyesi vermeyecek şekilde yönlendirilir.
 
-- **API anahtarı:** [openrouter.ai/keys](https://openrouter.ai/keys) adresinden alınan anahtar arayüzde **Ayarlar → Yapay zeka** bölümüne girilir ya da sunucuyu başlatırken `OPENROUTER_API_KEY` ortam değişkeniyle verilir. Anahtar sunucuda yalnızca sizin okuyabileceğiniz bir dosyada (`~/.local/share/marketalyzer/ai/settings.json`, izin 600) saklanır, tarayıcıya ve depoya hiçbir zaman gönderilmez; arayüzde yalnızca son 4 karakteri görünür.
-- **Model:** Ayarlar'da OpenRouter'daki araç kullanabilen modeller fiyatlarıyla listelenir. Seçilmezse araç kullanabilen en yeni Claude Sonnet modeli otomatik seçilir. `MARKETALYZER_AI_MODEL` ile de sabitlenebilir.
+- **Sağlayıcı:** **Ayarlar → Yapay zeka** bölümünde OpenRouter ya da fal.ai seçilir; asistan, script yazma, kör test ve canlı karar seçili sağlayıcıyla çalışır. fal.ai, OpenRouter'ın API'sini ve model kimliklerini (`google/gemini-…`, `anthropic/claude-…`) kendi adresinde (`https://fal.run/openrouter/router/openai/v1`) sunar ve ücreti fal.ai hesabınızdan alır. Seçim yapılmamışsa yalnızca fal.ai anahtarı varken fal.ai, aksi halde OpenRouter kullanılır.
+- **API anahtarı:** Her sağlayıcının kendi anahtarı vardır: OpenRouter için [openrouter.ai/keys](https://openrouter.ai/keys), fal.ai için [fal.ai/dashboard/keys](https://fal.ai/dashboard/keys). Anahtar Ayarlar'a girilir ya da sunucuyu başlatırken `OPENROUTER_API_KEY` / `FAL_KEY` ortam değişkeniyle verilir. Anahtarlar sunucuda yalnızca sizin okuyabileceğiniz bir dosyada (`~/.local/share/marketalyzer/ai/settings.json`, izin 600) saklanır, tarayıcıya ve depoya hiçbir zaman gönderilmez; arayüzde yalnızca son 4 karakteri görünür. Yanlış alana yapıştırılan anahtar (ör. fal.ai alanına `sk-or-…`) kaydedilmez.
+- **Model:** Ayarlar'da OpenRouter'daki araç kullanabilen modeller fiyatlarıyla listelenir; fal.ai'nin model listesi olmadığından fal.ai seçiliyken de bu liste kullanılır. Seçilmezse araç kullanabilen en yeni Claude Sonnet modeli otomatik seçilir. `MARKETALYZER_AI_MODEL` ile de sabitlenebilir.
+- **Anahtar testi:** OpenRouter anahtarının kullanımı ve limiti gösterilir. fal.ai'de böyle bir uç nokta olmadığından en ucuz hızlı modele (Gemini Flash Lite) tek token'lık bir soru sorulur.
 - **Sanal emir izni:** Asistanın sanal hesapta emir verip iptal edebilmesi için Ayarlar'da ayrıca izin verilmelidir (varsayılan kapalı). Gerçek emir hiçbir durumda yoktur.
-- **Maliyet:** Kullanım ücreti OpenRouter hesabınızdan düşer; her sohbetin token sayısı ve maliyeti arayüzde gösterilir.
+- **Maliyet:** Kullanım ücreti seçili sağlayıcıdaki hesabınızdan düşer; her sohbetin token sayısı ve sağlayıcının bildirdiği maliyet arayüzde gösterilir.
 - Sohbetler `~/.local/share/marketalyzer/ai/conversations/` altında saklanır. Yanıtlar sunucudan akış (SSE) olarak gelir; uzun backtestlerde tünelin bağlantıyı kesmemesi için düzenli canlılık sinyali gönderilir.
 
 ## AI Strateji: sinyal araştırması, yapay zekanın yazdığı script ve kör test
@@ -252,7 +254,7 @@ Masaüstünde pencere çerçeveli, kenar çubuklu bir uygulama; telefonda alt se
 - **Script editörü:** sözdizimi renklendirme, satır numaraları, otomatik tamamlama, anlık derleme ve hata satırı, parametre formu, konsol, fonksiyon başvurusu; grafikte çalıştırma, backtest, optimizasyon ve walk-forward.
 - **Backtest, Walk-forward, Tarama:** hazır stratejiler ve script stratejileriyle.
 - **Asistan:** sohbet geçmişi, araç çağrılarının canlı gösterimi, Markdown yanıtlar, scriptleri tek tıkla editörde açma, sembol ve editördeki scripti bağlam olarak ekleme.
-- **Ayarlar:** OpenRouter anahtarı, asistan modeli, karar modeli ve hız testi, emir izni, görünüm.
+- **Ayarlar:** yapay zeka sağlayıcısı (OpenRouter ya da fal.ai) ve anahtarı, asistan modeli, karar modeli ve hız testi, emir izni, görünüm.
 
 <kbd>⌘/Ctrl</kbd>+<kbd>K</kbd> komut paletini açar (sembol, sayfa, script ve eylem araması). <kbd>B</kbd> emir, <kbd>A</kbd> asistan, <kbd>H</kbd> bakiyeleri gizle; editörde <kbd>Ctrl</kbd>+<kbd>↵</kbd> çalıştırır, <kbd>Ctrl</kbd>+<kbd>S</kbd> kaydeder.
 

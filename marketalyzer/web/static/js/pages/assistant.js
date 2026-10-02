@@ -1,4 +1,4 @@
-// Assistant: chat with the AI, which uses the app's tools through OpenRouter.
+// Assistant: chat with the AI, which uses the app's tools through OpenRouter or fal.ai.
 import {
   $, api, ApiError, copyText, esc, fmtNumber, go, icon, loadPaper, state, store, stream, toast,
 } from "/static/js/core.js";
@@ -203,20 +203,24 @@ export function render(root, { params }) {
   function showKeyNeeded() {
     thread.innerHTML = `
       <div class="chat-hero"><div class="orb">${icon("key", "lg")}</div>
-        <h2>OpenRouter API anahtarı gerekli</h2>
-        <p>Asistan, OpenRouter üzerinden seçtiğiniz modeli kullanır. Anahtarınızı
-          <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" style="text-decoration:underline">openrouter.ai/keys</a>
+        <h2>API anahtarı gerekli</h2>
+        <p>Asistan, seçtiğiniz modeli OpenRouter ya da fal.ai üzerinden kullanır. Anahtarınızı
+          <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" style="text-decoration:underline">openrouter.ai/keys</a> veya
+          <a href="https://fal.ai/dashboard/keys" target="_blank" rel="noopener noreferrer" style="text-decoration:underline">fal.ai/dashboard/keys</a>
           adresinden alın. Anahtar yalnızca sunucuda saklanır, tarayıcıya geri gönderilmez.</p></div>
       <form class="card flat" data-key-form style="max-width:520px;margin:0 auto;width:100%">
         <div class="form">
-          <label class="field">API anahtarı<input name="key" type="password" placeholder="sk-or-v1-…" autocomplete="off" required></label>
+          <label class="field">OpenRouter ya da fal.ai API anahtarı<input name="key" type="password" placeholder="sk-or-v1-… / fal_sk_…" autocomplete="off" required></label>
           <button class="btn violet block" type="submit">${icon("key", "sm")} Kaydet ve başla</button>
         </div>
       </form>`;
     $("[data-key-form]", thread).addEventListener("submit", async (event) => {
       event.preventDefault();
+      const key = event.target.elements.key.value.trim();
+      // fal.ai keys are "fal_sk_…:…" or "<id>:<secret>"; OpenRouter's have no colon.
+      const fal = key.startsWith("fal_") || key.includes(":");
       try {
-        local.settings = await api("/api/ai/settings", { api_key: event.target.elements.key.value.trim() });
+        local.settings = await api("/api/ai/settings", fal ? { provider: "fal", fal_key: key } : { provider: "openrouter", api_key: key });
         if (state.meta) state.meta.ai = local.settings;
         toast("Anahtar kaydedildi.");
         showWelcome();

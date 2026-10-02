@@ -28,6 +28,7 @@ if ta.crossunder(close, average)
 @pytest.fixture(autouse=True)
 def no_env_key(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("FAL_KEY", raising=False)
     monkeypatch.delenv("MARKETALYZER_AI_MODEL", raising=False)
 
 
@@ -179,6 +180,38 @@ class TestAIEndpoints:
         save_settings(api_key="sk-or-v1-abcdef1234567890")
         response = client.post("/api/ai/test")
         assert response.status_code == 502 and "geçersiz" in response.json()["detail"]
+
+    def test_fal_settings_and_key_test(self, client, monkeypatch):
+        fal = "fal_sk_0123456789:abcdef0123456789"
+        saved = client.post(
+            "/api/ai/settings", json={"provider": "fal", "fal_key": fal}
+        ).json()
+        assert (saved["provider"], saved["configured"]) == ("fal", True)
+        assert saved["providers"]["openrouter"]["configured"] is False
+        assert "abcdef0123" not in json.dumps(saved)
+        assert client.get("/api/meta").json()["ai"]["provider"] == "fal"
+        bad = client.post("/api/ai/settings", json={"fal_key": "sk-or-v1-abc123456"})
+        assert bad.status_code == 400 and "OpenRouter" in bad.json()["detail"]
+
+        models = [{"id": "google/gemini-9.1-flash-lite"}, {"id": "a/b"}]
+        monkeypatch.setattr("marketalyzer.web.app.list_models", lambda *a, **k: models)
+        seen = {}
+
+        def fake_key_info(api_key, model=None):
+            seen.update(key=api_key, model=model)
+            return {"provider": "fal", "label": "fal.ai", "model": model, "cost": 0.0}
+
+        monkeypatch.setattr("marketalyzer.web.app.key_info", fake_key_info)
+        body = client.post("/api/ai/test").json()
+        assert body["ok"] is True and body["provider"] == "fal"
+        assert isinstance(seen["key"], openrouter.FalKey) and seen["key"] == fal
+        assert seen["model"] == "google/gemini-9.1-flash-lite"
+
+        cleared = client.post(
+            "/api/ai/settings", json={"clear_fal_key": True}
+        ).json()
+        assert cleared["configured"] is False
+        assert "API anahtarı" in client.post("/api/ai/test").json()["detail"]
 
     def test_chat_needs_a_key(self, client):
         response = client.post("/api/ai/chat", json={"message": "merhaba"})

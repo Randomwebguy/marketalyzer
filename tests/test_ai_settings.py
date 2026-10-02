@@ -5,6 +5,7 @@ import stat
 import pytest
 
 from marketalyzer.ai import settings as settings_module
+from marketalyzer.ai.openrouter import FalKey
 from marketalyzer.ai.settings import (
     AISettings,
     load_settings,
@@ -18,9 +19,13 @@ KEY = "sk-or-v1-0123456789abcdef0123456789abcdefWXYZ"
 POSIX = os.name == "posix"
 
 
+FAL = "fal_sk_0011223344556677:8899aabbccddeeffABCD"
+
+
 @pytest.fixture(autouse=True)
 def no_env(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("FAL_KEY", raising=False)
     monkeypatch.delenv("MARKETALYZER_AI_MODEL", raising=False)
 
 
@@ -120,16 +125,27 @@ def test_corrupt_file_gives_defaults():
 
 
 def test_public_settings_never_include_the_key(monkeypatch):
-    shown = public_settings(save_settings(api_key=KEY, model="a/b"))
+    shown = public_settings(save_settings(api_key=KEY, fal_key=FAL, model="a/b"))
     assert shown == {
+        "provider": "openrouter",
         "configured": True,
         "key_hint": "sk-or-…WXYZ",
         "key_source": "file",
+        "providers": {
+            "openrouter": {
+                "configured": True,
+                "key_hint": "sk-or-…WXYZ",
+                "key_source": "file",
+            },
+            "fal": {"configured": True, "key_hint": "fal-…ABCD", "key_source": "file"},
+        },
         "model": "a/b",
         "allow_trading": False,
         "decision_model": None,
     }
     assert KEY not in json.dumps(shown)
+    assert FAL not in json.dumps(shown)
+    assert "8899aabb" not in json.dumps(shown)
     assert public_settings(AISettings())["key_hint"] is None
     assert public_settings(AISettings())["configured"] is False
     # A short key is not revealed through its "last four" characters.
@@ -147,6 +163,60 @@ def test_failed_write_leaves_no_temp_file(monkeypatch):
         save_settings(model="a/b")
     assert [p.name for p in settings_path().parent.iterdir()] == ["settings.json"]
     assert load_settings().model is None
+
+
+def test_fal_key_and_provider():
+    save_settings(api_key=KEY)
+    current = save_settings(fal_key=f" {FAL}\n", provider="fal")
+    assert current.provider == "fal"
+    assert current.api_key == FAL
+    assert isinstance(current.api_key, FalKey)
+    assert current.key_source == "file"
+    assert load_settings() == current
+    assert FAL not in repr(current)
+    # Switching back uses the OpenRouter key, which was kept.
+    back = save_settings(provider="openrouter")
+    assert back.api_key == KEY
+    assert not isinstance(back.api_key, FalKey)
+    stored = json.loads(settings_path().read_text())
+    assert (stored["api_key"], stored["fal_key"]) == (KEY, FAL)
+
+
+def test_provider_defaults_to_the_one_with_a_key():
+    assert load_settings().provider == "openrouter"
+    assert save_settings(fal_key=FAL).provider == "fal"
+    assert save_settings(api_key=KEY).provider == "openrouter"
+    # A chosen provider without a key stays chosen: nothing is configured.
+    chosen = save_settings(provider="fal", clear_fal_key=True)
+    assert (chosen.provider, chosen.api_key, chosen.key_source) == ("fal", None, None)
+
+
+def test_clear_fal_key_keeps_the_openrouter_key():
+    save_settings(api_key=KEY, fal_key=FAL)
+    cleared = save_settings(clear_fal_key=True)
+    assert cleared.api_key == KEY
+    assert "fal_key" not in json.loads(settings_path().read_text())
+
+
+def test_fal_key_from_the_environment(monkeypatch):
+    monkeypatch.setenv("FAL_KEY", FAL)
+    current = load_settings()
+    assert (current.provider, current.api_key, current.key_source) == ("fal", FAL, "env")
+    assert isinstance(current.api_key, FalKey)
+    save_settings(allow_trading=True)
+    assert "fal_key" not in json.loads(settings_path().read_text())
+
+
+def test_keys_in_the_wrong_field_are_rejected():
+    with pytest.raises(ValueError, match="OpenRouter anahtarı"):
+        save_settings(fal_key=KEY)
+    with pytest.raises(ValueError, match="fal.ai anahtarı"):
+        save_settings(api_key=FAL)
+    with pytest.raises(ValueError, match="API anahtarı"):
+        save_settings(fal_key="fal key")
+    with pytest.raises(ValueError, match="sağlayıcı"):
+        save_settings(provider="anthropic")
+    assert not settings_path().exists()
 
 
 def test_decision_model(monkeypatch):

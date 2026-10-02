@@ -118,8 +118,8 @@ class ChatRunner:
         settings = load_settings()
         if not settings.api_key:
             raise ChatError(
-                "OpenRouter API anahtarı ayarlanmamış. Ayarlar > Yapay zeka bölümünden"
-                " anahtarınızı ekleyin."
+                "API anahtarı ayarlanmamış. Ayarlar > Yapay zeka bölümünden OpenRouter"
+                " ya da fal.ai anahtarınızı ekleyin."
             )
         if conversation_id:
             try:

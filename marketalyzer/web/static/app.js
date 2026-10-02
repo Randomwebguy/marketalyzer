@@ -28,7 +28,7 @@ const SUBTITLES = {
   islem: "Gerçek para kullanılmaz; emirler sanal hesapta eşleşir", lab: "Pine Script benzeri gösterge ve stratejiler",
   backtest: "BIST maliyetleriyle geçmiş veride test", walkforward: "Geçmişte optimize et, ileriye dönük test et",
   tarama: "Bir scripti birçok hissede çalıştır",
-  strateji: "Sinyal araştırması, AI ile Pine Script ve kör backtest", asistan: "OpenRouter üzerinden yapay zeka", ayarlar: "API anahtarı, model ve hesap",
+  strateji: "Sinyal araştırması, AI ile Pine Script ve kör backtest", asistan: "OpenRouter ya da fal.ai üzerinden yapay zeka", ayarlar: "API anahtarı, model ve hesap",
 };
 
 function parseHash() {

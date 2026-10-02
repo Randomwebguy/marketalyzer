@@ -1,5 +1,17 @@
-// Settings: OpenRouter key and model, assistant permissions, display, app.
+// Settings: AI provider (OpenRouter or fal.ai), its key and model, assistant permissions, display, app.
 import { $, api, busy, emit, esc, fmtMoney, fmtNumber, icon, state, store, toast } from "/static/js/core.js";
+
+// The request fields and help for each provider's key.
+const PROVIDERS = {
+  openrouter: {
+    label: "OpenRouter", field: "api_key", clear: "clear_key", env: "OPENROUTER_API_KEY",
+    placeholder: "sk-or-v1-…", url: "https://openrouter.ai/keys", site: "openrouter.ai/keys",
+  },
+  fal: {
+    label: "fal.ai", field: "fal_key", clear: "clear_fal_key", env: "FAL_KEY",
+    placeholder: "fal_sk_…:…", url: "https://fal.ai/dashboard/keys", site: "fal.ai/dashboard/keys",
+  },
+};
 
 export function render(root) {
   const local = {
@@ -20,18 +32,25 @@ export function render(root) {
 
   function drawAi() {
     const s = local.settings;
+    const provider = s?.provider ?? "openrouter";
+    const p = PROVIDERS[provider];
     const box = $("[data-ai]", root);
     box.innerHTML = `
-      <div class="card-head"><h2>Yapay zeka · OpenRouter</h2><span class="spacer"></span><span class="badge violet">AI</span></div>
+      <div class="card-head"><h2>Yapay zeka · ${p.label}</h2><span class="spacer"></span><span class="badge violet">AI</span></div>
+      <div class="setting"><div class="grow"><b>Sağlayıcı</b>
+        <span>Sohbet, script yazma, kör test ve canlı kararlar seçili sağlayıcıyla çalışır. fal.ai aynı modelleri kendi hesabınızdan ücretlendirir.</span></div>
+        <div class="segmented" role="group" aria-label="Yapay zeka sağlayıcısı">${Object.entries(PROVIDERS).map(([key, item]) => `
+          <button type="button" data-pick-provider="${key}" class="${key === provider ? "active" : ""}" aria-pressed="${key === provider}">${item.label}${s?.providers?.[key]?.configured ? " ✓" : ""}</button>`).join("")}
+        </div></div>
       <div class="key-status"><span class="light ${s?.configured ? "on" : ""}"></span>
-        <div class="grow" style="flex:1"><b>${s?.configured ? "Anahtar bağlı" : "Anahtar yok"}</b>
-          <div class="muted small">${s?.configured ? `${esc(s.key_hint)} · ${s.key_source === "env" ? "OPENROUTER_API_KEY ortam değişkeni" : "sunucudaki ayar dosyası"}` : "Asistanı kullanmak için bir OpenRouter API anahtarı ekleyin."}</div></div>
+        <div class="grow" style="flex:1"><b>${s?.configured ? `${p.label} anahtarı bağlı` : `${p.label} anahtarı yok`}</b>
+          <div class="muted small">${s?.configured ? `${esc(s.key_hint)} · ${s.key_source === "env" ? `${p.env} ortam değişkeni` : "sunucudaki ayar dosyası"}` : `Asistanı kullanmak için bir ${p.label} API anahtarı ekleyin.`}</div></div>
         ${s?.configured ? `<button class="btn small" type="button" data-test>${icon("zap", "sm")} Test et</button>` : ""}
       </div>
       <form class="form" data-key-form style="margin-top:14px">
-        <label class="field">${s?.configured ? "Anahtarı değiştir" : "API anahtarı"}
-          <input name="key" type="password" placeholder="sk-or-v1-…" autocomplete="off" spellcheck="false">
-          <span class="hint">Anahtarınızı <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" style="text-decoration:underline">openrouter.ai/keys</a> adresinden oluşturun.
+        <label class="field">${s?.configured ? `${p.label} anahtarını değiştir` : `${p.label} API anahtarı`}
+          <input name="key" type="password" placeholder="${p.placeholder}" autocomplete="off" spellcheck="false">
+          <span class="hint">Anahtarınızı <a href="${p.url}" target="_blank" rel="noopener noreferrer" style="text-decoration:underline">${p.site}</a> adresinden oluşturun.
           Sunucuda yalnızca sizin okuyabileceğiniz bir dosyada (izin 600) saklanır ve tarayıcıya geri gönderilmez.</span></label>
         <div class="row-flex">
           <button class="btn violet" type="submit">${icon("key", "sm")} Kaydet</button>
@@ -45,7 +64,7 @@ export function render(root) {
         <span>Açıksa asistan, siz istediğinizde sanal hesapta emir verip iptal edebilir. Gerçek para yoktur.</span></div>
         <label class="switch"><input type="checkbox" data-trading ${s?.allow_trading ? "checked" : ""} aria-label="Asistan sanal emir verebilir"><span></span></label></div>
       <p class="muted small" style="margin:12px 0 0">Asistan; fiyat, teknik analiz, script, backtest, optimizasyon, walk-forward, tarama ve sanal hesap
-        araçlarını kullanır. Kullanım ücreti OpenRouter hesabınızdan düşer; her sohbetin token ve maliyeti gösterilir.</p>`;
+        araçlarını kullanır. Kullanım ücreti ${p.label} hesabınızdan düşer; her sohbetin token ve maliyeti gösterilir.</p>`;
   }
 
   function drawModels() {
@@ -53,7 +72,7 @@ export function render(root) {
     box.id = "models";
     if (!local.models) {
       box.innerHTML = `<div class="card-head"><h2>Model</h2></div>
-        <div class="empty"><b>Model listesi</b>OpenRouter'daki modelleri fiyatlarıyla listeleyin.
+        <div class="empty"><b>Model listesi</b>OpenRouter'daki modelleri fiyatlarıyla listeleyin${local.settings?.provider === "fal" ? "; fal.ai aynı model kimliklerini kullanır" : ""}.
         <div><button class="btn" type="button" data-load-models>${icon("refresh", "sm")} Modelleri yükle</button></div></div>`;
       return;
     }
@@ -63,7 +82,7 @@ export function render(root) {
       .slice(0, 200);
     const price = (m) => (m.prompt_price === null ? "—" : `$${fmtNumber(m.prompt_price, 2)} / $${fmtNumber(m.completion_price ?? 0, 2)}`);
     box.innerHTML = `
-      <div class="card-head"><h2>Model</h2><span class="sub">${shown.length} model · 1M token giriş/çıkış fiyatı</span></div>
+      <div class="card-head"><h2>Model</h2><span class="sub">${shown.length} model · 1M token giriş/çıkış fiyatı${local.settings?.provider === "fal" ? " · OpenRouter listesi, fal.ai'de aynı kimlikler" : ""}</span></div>
       <div class="row-flex" style="margin-bottom:10px">
         <input class="input" data-model-search placeholder="claude, gpt, gemini…" value="${esc(local.query)}" style="flex:1;height:34px" aria-label="Model ara">
         <label class="check"><input type="checkbox" data-tools-only ${local.toolsOnly ? "checked" : ""}> Araç destekleyenler</label>
@@ -111,7 +130,7 @@ export function render(root) {
           <td>${row.ok ? `${esc(row.decision)} %${row.confidence ?? "—"}<div class="muted small">${esc(row.reason ?? "")}</div>` : "—"}</td>
           <td>${row.ok && row.key !== current ? `<button class="btn small" type="button" data-pick-decision="${esc(row.key)}">Seç</button>` : ""}</td>
         </tr>`).join("")}</tbody></table></div>
-        <p class="muted small">Süreler bu sunucudan OpenRouter'a gidiş-dönüştür; ağınıza ve sağlayıcının o anki yüküne göre değişir.</p>` : ""}`;
+        <p class="muted small">Süreler bu sunucudan ${PROVIDERS[local.settings?.provider ?? "openrouter"].label} üzerinden gidiş-dönüştür; ağınıza ve sağlayıcının o anki yüküne göre değişir.</p>` : ""}`;
   }
 
   async function loadDecision() {
@@ -164,7 +183,7 @@ export function render(root) {
     }
     drawAi();
     drawModels();
-    if (body.decision_model !== undefined || body.api_key) loadDecision();
+    if (body.decision_model !== undefined || body.api_key || body.fal_key || body.provider) loadDecision();
   }
 
   root.addEventListener("submit", async (event) => {
@@ -178,7 +197,8 @@ export function render(root) {
     event.preventDefault();
     const key = event.target.elements.key.value.trim();
     if (!key) return;
-    await saveSettings({ api_key: key }, "Anahtar kaydedildi.");
+    const provider = local.settings?.provider ?? "openrouter";
+    await saveSettings({ provider, [PROVIDERS[provider].field]: key }, `${PROVIDERS[provider].label} anahtarı kaydedildi.`);
   });
   root.addEventListener("click", async (event) => {
     const t = event.target;
@@ -187,15 +207,23 @@ export function render(root) {
       busy(button, true, "Deneniyor…");
       try {
         const info = await api("/api/ai/test", {});
-        const limit = info.limit === null || info.limit === undefined ? "limitsiz" : `limit $${fmtNumber(info.limit, 2)}`;
-        toast(`Bağlantı tamam · ${info.label || "anahtar"} · kullanım $${fmtNumber(info.usage ?? 0, 4)} · ${limit}`);
+        if (info.provider === "fal") {
+          toast(`Bağlantı tamam · fal.ai · ${info.model} yanıt verdi · $${fmtNumber(info.cost ?? 0, 6)}`);
+        } else {
+          const limit = info.limit === null || info.limit === undefined ? "limitsiz" : `limit $${fmtNumber(info.limit, 2)}`;
+          toast(`Bağlantı tamam · ${info.label || "anahtar"} · kullanım $${fmtNumber(info.usage ?? 0, 4)} · ${limit}`);
+        }
       } catch (error) {
         toast(error.message, "error");
       } finally {
         busy(button, false);
       }
+    } else if (t.closest("[data-pick-provider]")) {
+      const key = t.closest("[data-pick-provider]").dataset.pickProvider;
+      if (key !== local.settings?.provider) await saveSettings({ provider: key }, `Sağlayıcı: ${PROVIDERS[key].label}`);
     } else if (t.closest("[data-clear]")) {
-      if (confirm("Kayıtlı API anahtarı silinsin mi?")) await saveSettings({ clear_key: true }, "Anahtar kaldırıldı.");
+      const p = PROVIDERS[local.settings?.provider ?? "openrouter"];
+      if (confirm(`Kayıtlı ${p.label} anahtarı silinsin mi?`)) await saveSettings({ [p.clear]: true }, "Anahtar kaldırıldı.");
     } else if (t.closest("[data-load-models]")) {
       const button = t.closest("[data-load-models]");
       busy(button, true, "Yükleniyor…");
@@ -215,7 +243,7 @@ export function render(root) {
       await saveSettings({ decision_model: key }, "Karar modeli seçildi.");
     } else if (t.closest("[data-speed]")) {
       if (!local.settings?.configured) {
-        toast("Önce bir OpenRouter API anahtarı kaydedin.", "error");
+        toast("Önce seçili sağlayıcı için bir API anahtarı kaydedin.", "error");
         return;
       }
       local.testing = true;
