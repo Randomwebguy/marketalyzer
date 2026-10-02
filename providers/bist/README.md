@@ -63,7 +63,7 @@ Sınırın ötesindeki bir başlangıç tarihi otomatik olarak sınıra çekilir
 
 ## Veri notları (backtest ve canlı test için önemli)
 
-- **Kaynak Yahoo Finance chart API'sidir.** Resmi bir BIST veri lisansı değildir. Erişim sınırı (HTTP 429) uygulanabilir ve uç nokta haber verilmeden değişebilir.
+- **Kaynak Yahoo Finance chart API'sidir.** Resmi bir BIST veri lisansı değildir. Uç nokta haber verilmeden değişebilir. Yahoo, tarayıcıya benzemeyen isteklere ilk istekte bile erişim sınırı (HTTP 429) uyguladığı için istekler `curl_cffi` ile Chrome gibi gönderilir; aynı anda en fazla 4 istek yapılır, yanıtlar 60 saniye önbellekte tutulur ve 429 gelirse diğer sunucuda beklemeli olarak yeniden denenir. Sınır sürerse 30 saniye istek yapılmaz.
 - **Veriler yaklaşık 15 dakika gecikmelidir.** Bu veriyle yapılan "canlı test", gecikmeli veriyle yapılan bir kağıt üzerinde işlemdir (paper trading). Gerçek zamanlı veri için lisanslı bir veri sağlayıcısı veya aracı kurum API'si gerekir.
 - **Düzeltmeler:** `splits_only` (varsayılan) bölünme ve bedelsiz sermaye artırımlarına göre düzeltilmiş fiyatları verir. `splits_and_dividends` ayrıca nakit temettüleri de geriye doğru düzeltir. Yahoo'nun BIST'teki bedelsiz düzeltmeleri zaman zaman hatalı olabilir. Backtest öncesinde büyük fiyat sıçramalarını kontrol edin.
 - Seviye 2 (derinlik) verisi, VİOP ve KAP bildirimleri kapsam dışıdır.

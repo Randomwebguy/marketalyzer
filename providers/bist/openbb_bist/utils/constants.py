@@ -4,7 +4,10 @@ from typing import Literal
 
 TIMEZONE = "Europe/Istanbul"
 YAHOO_SUFFIX = ".IS"
-CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+# Yahoo serves the same chart API from two hosts; a request rejected by one is
+# retried on the other.
+CHART_HOSTS = ("query1.finance.yahoo.com", "query2.finance.yahoo.com")
+CHART_URL = "https://{host}/v8/finance/chart/{symbol}"
 
 Interval = Literal["1m", "2m", "5m", "15m", "30m", "1h", "1d", "1W", "1M"]
 INTERVALS: list[str] = ["1m", "2m", "5m", "15m", "30m", "1h", "1d", "1W", "1M"]

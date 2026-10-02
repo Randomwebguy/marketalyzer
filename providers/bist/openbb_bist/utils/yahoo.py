@@ -5,6 +5,9 @@ mocking it in tests only needs that one function replaced.
 """
 
 import asyncio
+import json
+import threading
+import time as clock
 from collections.abc import Callable
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -12,10 +15,12 @@ from urllib.parse import quote
 from warnings import warn
 from zoneinfo import ZoneInfo
 
+from curl_cffi import requests as curl_requests
 from openbb_core.app.model.abstract.error import OpenBBError
 from openbb_core.provider.utils.errors import EmptyDataError
 
 from openbb_bist.utils.constants import (
+    CHART_HOSTS,
     CHART_URL,
     INTRADAY_DEFAULT_DAYS,
     INTRADAY_LOOKBACK_DAYS,
@@ -29,28 +34,108 @@ IST = ZoneInfo(TIMEZONE)
 PRICE_DECIMALS = 4
 
 
+# Yahoo answers HTTP 429 ("Too Many Requests") to clients that do not look like
+# a browser, even on the first request, so requests impersonate Chrome. They are
+# also limited in number, briefly cached and retried after a pause.
+IMPERSONATE = "chrome"
+MAX_CONCURRENT = 4
+CACHE_SECONDS = 60.0
+CACHE_SIZE = 512
+RETRY_DELAYS = (1.0, 3.0)
+COOLDOWN_SECONDS = 30.0
+RATE_LIMITED = "Yahoo Finance rate limit reached (HTTP 429). Try again later."
+
+_slots = threading.BoundedSemaphore(MAX_CONCURRENT)
+_lock = threading.Lock()
+_local = threading.local()
+_cache: dict[tuple, tuple[float, dict[str, Any]]] = {}
+_blocked_until = 0.0
+
+
+def _session() -> curl_requests.Session:
+    """Return this thread's session, so connections and cookies are reused."""
+    session = getattr(_local, "session", None)
+    if session is None:
+        session = _local.session = curl_requests.Session(impersonate=IMPERSONATE)
+    return session
+
+
+def _send(url: str, params: dict[str, str]) -> tuple[int, bytes, str | None]:
+    """Make one GET request; return the status, body and Retry-After header."""
+    with _slots:
+        response = _session().get(url, params=params, timeout=15)
+    return response.status_code, response.content, response.headers.get("retry-after")
+
+
+def _wait_seconds(retry_after: str | None, default: float) -> float:
+    try:
+        return min(max(float(retry_after or default), 0.0), 10.0)
+    except ValueError:
+        return default
+
+
+def clear_cache() -> None:
+    """Forget cached payloads and any rate-limit pause."""
+    global _blocked_until  # noqa: PLW0603
+    with _lock:
+        _cache.clear()
+        _blocked_until = 0.0
+
+
+def _cached(key: tuple) -> dict[str, Any] | None:
+    with _lock:
+        hit = _cache.get(key)
+        if hit and clock.monotonic() - hit[0] < CACHE_SECONDS:
+            return hit[1]
+        return None
+
+
+def _remember(key: tuple, payload: dict[str, Any]) -> None:
+    with _lock:
+        if len(_cache) >= CACHE_SIZE:
+            del _cache[min(_cache, key=lambda k: _cache[k][0])]
+        _cache[key] = (clock.monotonic(), payload)
+
+
+def _fetch_chart(symbol: str, params: dict[str, str]) -> dict[str, Any]:
+    """Request a chart payload, retrying on a rate limit; blocking."""
+    global _blocked_until  # noqa: PLW0603
+    if clock.monotonic() < _blocked_until:
+        raise OpenBBError(RATE_LIMITED)
+    attempts = len(RETRY_DELAYS) + 1
+    for attempt in range(attempts):
+        host = CHART_HOSTS[attempt % len(CHART_HOSTS)]
+        url = CHART_URL.format(host=host, symbol=quote(symbol))
+        try:
+            status, body, retry_after = _send(url, params)
+        except curl_requests.RequestsError as error:
+            raise OpenBBError(
+                f"Could not reach Yahoo Finance for {symbol}: {error}"
+            ) from error
+        if status != 429:
+            try:
+                return json.loads(body)
+            except ValueError as error:
+                raise OpenBBError(
+                    f"Unexpected response from Yahoo Finance for {symbol}"
+                    f" (HTTP {status})."
+                ) from error
+        if attempt < len(RETRY_DELAYS):
+            clock.sleep(_wait_seconds(retry_after, RETRY_DELAYS[attempt]))
+    # Stop asking for a while: more requests would only extend the block.
+    _blocked_until = clock.monotonic() + COOLDOWN_SECONDS
+    raise OpenBBError(RATE_LIMITED)
+
+
 async def get_chart(symbol: str, params: dict[str, str]) -> dict[str, Any]:
     """Request one chart payload for a Yahoo ticker."""
-    from openbb_core.provider.utils.helpers import amake_request
-
-    async def _callback(response, _):
-        if response.status == 429:
-            raise OpenBBError(
-                "Yahoo Finance rate limit reached (HTTP 429). Try again later."
-            )
-        try:
-            return await response.json(content_type=None)
-        except ValueError as error:
-            raise OpenBBError(
-                f"Unexpected response from Yahoo Finance for {symbol}"
-                f" (HTTP {response.status})."
-            ) from error
-
-    return await amake_request(  # type: ignore[return-value]
-        CHART_URL.format(symbol=quote(symbol)),
-        params=params,
-        response_callback=_callback,
-    )
+    key = (symbol, tuple(sorted(params.items())))
+    payload = _cached(key)
+    if payload is None:
+        payload = await asyncio.to_thread(_fetch_chart, symbol, params)
+        if not (payload.get("chart") or {}).get("error"):
+            _remember(key, payload)
+    return payload
 
 
 def chart_result(payload: dict[str, Any], label: str) -> dict[str, Any]:

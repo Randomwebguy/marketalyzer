@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -268,3 +269,75 @@ def test_fetch_quotes_skips_failures(fake_chart):
         data = asyncio.run(yahoo.fetch_quotes(["THYAO.IS", "NOPE.IS"]))
     assert [row["symbol"] for row in data] == ["THYAO"]
     assert fake_chart.calls[0][1] == {"range": "1d", "interval": "1d"}
+
+
+class TestGetChart:
+    """The request layer: impersonated session, retries, cache and cooldown."""
+
+    @pytest.fixture
+    def sent(self, monkeypatch):
+        """Replace the HTTP call; ``replies`` is consumed one per request."""
+        yahoo.clear_cache()
+        monkeypatch.setattr(yahoo, "RETRY_DELAYS", (0.0, 0.0))
+        calls = []
+        replies = []
+
+        def _send(url, params):
+            calls.append(url)
+            return replies.pop(0)
+
+        monkeypatch.setattr(yahoo, "_send", _send)
+        yield calls, replies
+        yahoo.clear_cache()
+
+    @staticmethod
+    def ok(payload):
+        return 200, json.dumps(payload).encode(), None
+
+    def test_returns_payload_and_caches_it(self, sent):
+        calls, replies = sent
+        payload = make_chart("THYAO.IS", THYAO_DAILY)
+        replies.append(self.ok(payload))
+        params = {"range": "1d", "interval": "1d"}
+        assert asyncio.run(yahoo.get_chart("THYAO.IS", params)) == payload
+        assert asyncio.run(yahoo.get_chart("THYAO.IS", dict(params))) == payload
+        assert calls == ["https://query1.finance.yahoo.com/v8/finance/chart/THYAO.IS"]
+
+    def test_error_payload_is_not_cached(self, sent):
+        calls, replies = sent
+        replies.extend([(404, json.dumps(not_found()).encode(), None)] * 2)
+        for _ in range(2):
+            asyncio.run(yahoo.get_chart("NOPE.IS", {"range": "1d"}))
+        assert len(calls) == 2
+
+    def test_rate_limit_is_retried_on_the_other_host(self, sent):
+        calls, replies = sent
+        payload = make_chart("THYAO.IS", THYAO_DAILY)
+        replies.extend([(429, b"Too Many Requests", "0"), self.ok(payload)])
+        assert asyncio.run(yahoo.get_chart("THYAO.IS", {"range": "1d"})) == payload
+        assert [url.split("/")[2] for url in calls] == [
+            "query1.finance.yahoo.com",
+            "query2.finance.yahoo.com",
+        ]
+
+    def test_persistent_rate_limit_pauses_requests(self, sent):
+        calls, replies = sent
+        replies.extend([(429, b"", None)] * 3)
+        with pytest.raises(OpenBBError, match="rate limit"):
+            asyncio.run(yahoo.get_chart("THYAO.IS", {"range": "1d"}))
+        assert len(calls) == 3
+        with pytest.raises(OpenBBError, match="rate limit"):
+            asyncio.run(yahoo.get_chart("GARAN.IS", {"range": "1d"}))
+        assert len(calls) == 3
+
+    def test_unexpected_body(self, sent):
+        _, replies = sent
+        replies.append((503, b"<html>down</html>", None))
+        with pytest.raises(OpenBBError, match="HTTP 503"):
+            asyncio.run(yahoo.get_chart("THYAO.IS", {"range": "1d"}))
+
+    def test_wait_seconds(self):
+        assert yahoo._wait_seconds("2", 1.0) == 2.0
+        assert yahoo._wait_seconds(None, 1.5) == 1.5
+        assert yahoo._wait_seconds("soon", 1.0) == 1.0
+        assert yahoo._wait_seconds("600", 1.0) == 10.0
