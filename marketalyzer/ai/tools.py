@@ -185,6 +185,34 @@ class Tools:
                 ),
             ),
             Tool(
+                "signal_study",
+                "1-8 hissenin eğitim dönemindeki davranışı (getiri, oynaklık, maks. düşüş,"
+                " beta, momentum/ortalamaya dönüş eğilimi, likidite) ve ~35 aday sinyalin"
+                " (trend, kırılım, momentum, dönüş, hacim, fiyat) ardından gelen 10 barlık"
+                " fazla getirisi, isabeti ve gücü; hisseler arası korelasyon. 'cutoff'"
+                " verilirse yalnızca o tarihe kadarki veri kullanılır. Strateji tasarlarken"
+                " hangi sinyallerin işe yaradığını görmek için kullan.",
+                _obj(
+                    {
+                        "symbols": {
+                            "type": "array",
+                            "items": SYMBOL,
+                            "minItems": 1,
+                            "maxItems": 8,
+                        },
+                        "cutoff": DATE,
+                        "years": {
+                            "type": "number",
+                            "minimum": 0.5,
+                            "maximum": 10,
+                            "default": 2,
+                        },
+                    },
+                    ["symbols"],
+                ),
+                self.signal_study,
+            ),
+            Tool(
                 "list_strategies",
                 "Backtest/paper trading için kullanılabilecek stratejiler, parametreleri"
                 " ve optimizasyon ızgaraları.",
@@ -412,6 +440,46 @@ class Tools:
     def price_history(self, symbol, interval="1d", start=None, end=None, bars=30):
         """Statistics and recent bars."""
         return services.history_summary(symbol, interval, start, end, limit=bars)
+
+    def signal_study(self, symbols, cutoff=None, years=2) -> dict[str, Any]:
+        """Return a compact signal study: behavior and the strongest signals."""
+        from marketalyzer import research
+
+        result = research.study(symbols, cutoff, years)
+        compact = []
+        for item in result["symbols"]:
+            rows = [r for r in item["signals"] if r["strength"] in ("güçlü", "zayıf")]
+            rows.sort(key=lambda r: -abs(r["t"] or 0))
+            compact.append(
+                {
+                    "symbol": item["symbol"],
+                    "period": f"{item['start']} – {item['end']}",
+                    "behavior": item["behavior"],
+                    "signals": [
+                        {
+                            "key": r["key"],
+                            "label": r["label"],
+                            "events": r["events"],
+                            "excess_10_bar_pct": r["h10"]["excess_pct"],
+                            "hit_10_bar_pct": r["h10"]["hit_pct"],
+                            "t": r["t"],
+                            "strength": r["strength"],
+                        }
+                        for r in rows[:8]
+                    ],
+                    "active_now": item["active_now"],
+                }
+            )
+        return {
+            "cutoff": result["cutoff"],
+            "symbols": compact,
+            "ranking": [
+                {k: r[k] for k in ("key", "label", "events", "excess_pct", "score")}
+                for r in result["ranking"][:10]
+            ],
+            "correlation_average": (result["correlation"] or {}).get("average"),
+            "notes": result["notes"],
+        }
 
     def list_strategies(self) -> dict[str, Any]:
         """Strategies with parameters and grid sizes."""

@@ -63,6 +63,7 @@ const ICONS = {
   logout: '<path d="M14 4h6v16h-6M10 12h10M7 9l-3 3 3 3"/>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
   back: '<path d="M15 6l-6 6 6 6"/>',
+  target: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
 };
 export const icon = (name, cls = "") =>
   `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] ?? ""}</svg>`;
@@ -211,7 +212,18 @@ export const signedMoney = (v) =>
     style: "currency", currency: "TRY", signDisplay: "exceptZero", maximumFractionDigits: 2,
   }).format(v);
 export const initials = (symbol) => esc(String(symbol).replace(/[^A-Z0-9]/gi, "").slice(0, 2).toUpperCase());
-export const normalize = (text) => String(text || "").trim().toUpperCase().replace(/\.(IS|E)$/, "");
+// Common company names people type instead of the ticker.
+const ALIASES = {
+  THY: "THYAO", "TÜRKHAVAYOLLARI": "THYAO", BIM: "BIMAS", "BİM": "BIMAS", "BİMAŞ": "BIMAS", BIMAŞ: "BIMAS",
+  ASELSAN: "ASELS", TUPRAS: "TUPRS", "TÜPRAŞ": "TUPRS", "TUPRAŞ": "TUPRS", "TÜPRAS": "TUPRS", ENKA: "ENKAI",
+  GARANTI: "GARAN", "GARANTİ": "GARAN", AKBANK: "AKBNK", SISECAM: "SISE", "ŞİŞECAM": "SISE", EREGLI: "EREGL",
+  "EREĞLİ": "EREGL", KOC: "KCHOL", "KOÇ": "KCHOL", YAPIKREDI: "YKBNK", "YAPIKREDİ": "YKBNK", FORD: "FROTO",
+  TURKCELL: "TCELL", PEGASUS: "PGSUS", SABANCI: "SAHOL", "ŞİŞE": "SISE",
+};
+export const normalize = (text) => {
+  const code = String(text || "").trim().toUpperCase().replace(/\.(IS|E)$/, "");
+  return ALIASES[code.replace(/\s+/g, "")] ?? code;
+};
 const TICKS = [[2500, 2.5], [1000, 1], [500, 0.5], [250, 0.25], [100, 0.1], [50, 0.05], [20, 0.02], [0, 0.01]];
 export const tickSize = (price) => TICKS.find(([floor]) => price >= floor)?.[1] ?? 0.01;
 export const dateOnly = (offsetDays) => new Date(Date.now() + offsetDays * 864e5).toISOString().slice(0, 10);

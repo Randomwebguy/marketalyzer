@@ -2,7 +2,9 @@
 
 Settings live in ``<home>/ai/settings.json``, readable only by the owner. The
 ``OPENROUTER_API_KEY`` and ``MARKETALYZER_AI_MODEL`` environment variables
-override the file. The key is never logged or returned to the UI.
+override the file. The key is never logged or returned to the UI. The
+decision model, used for fast buy/sell decisions, is a preset key such as
+``claude-haiku`` or any OpenRouter model id.
 """
 
 import json
@@ -16,6 +18,7 @@ from marketalyzer.paper.cli import default_home
 
 KEY_ENV = "OPENROUTER_API_KEY"
 MODEL_ENV = "MARKETALYZER_AI_MODEL"
+DECISION_MODEL_ENV = "MARKETALYZER_DECISION_MODEL"
 MAX_KEY_LENGTH = 200
 MAX_MODEL_LENGTH = 200
 # Marks a save_settings argument that was not passed.
@@ -34,6 +37,8 @@ class AISettings:
         The OpenRouter model id, or None to pick a default.
     allow_trading
         Whether the assistant may place and cancel paper orders.
+    decision_model
+        The preset key or model id for fast decisions, or None for the default.
     key_source
         Where the key came from: "env", "file" or None.
     """
@@ -42,6 +47,7 @@ class AISettings:
     model: str | None = None
     allow_trading: bool = False
     key_source: str | None = None
+    decision_model: str | None = None
 
 
 def ai_home() -> Path:
@@ -103,6 +109,7 @@ def load_settings() -> AISettings:
         api_key=_text(stored.get("api_key")),
         model=_text(stored.get("model")),
         allow_trading=stored.get("allow_trading") is True,
+        decision_model=_text(stored.get("decision_model")),
     )
     if settings.api_key:
         settings.key_source = "file"
@@ -112,6 +119,9 @@ def load_settings() -> AISettings:
     env_model = os.environ.get(MODEL_ENV, "").strip()
     if env_model:
         settings.model = env_model
+    env_decision = os.environ.get(DECISION_MODEL_ENV, "").strip()
+    if env_decision:
+        settings.decision_model = env_decision
     return settings
 
 
@@ -145,6 +155,7 @@ def save_settings(
     api_key: str | None = _UNSET,
     model: str | None = _UNSET,
     allow_trading: bool = _UNSET,
+    decision_model: str | None = _UNSET,
     clear_key: bool = False,
 ) -> AISettings:
     """Change the stored settings and return the effective ones.
@@ -173,6 +184,12 @@ def save_settings(
             stored["model"] = checked
     if allow_trading is not _UNSET:
         stored["allow_trading"] = bool(allow_trading)
+    if decision_model is not _UNSET:
+        checked = _check_model(decision_model)
+        if checked is None:
+            stored.pop("decision_model", None)
+        else:
+            stored["decision_model"] = checked
     write_json(settings_path(), stored)
     return load_settings()
 
@@ -193,4 +210,5 @@ def public_settings(settings: AISettings) -> dict[str, Any]:
         "key_source": settings.key_source,
         "model": settings.model,
         "allow_trading": settings.allow_trading,
+        "decision_model": settings.decision_model,
     }

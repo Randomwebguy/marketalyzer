@@ -40,7 +40,7 @@ Bugün {today} (İstanbul saati). {data_note}
 
 Araç seçimi:
 - Genel piyasa: market_overview. Tek hisse analizi: technical_analysis, gerekirse
-  price_history.
+  price_history. Hangi sinyallerin bir hissede geçmişte işe yaradığı: signal_study.
 - Strateji fikri: script yaz -> check_script -> backtest -> (istenirse)
   optimize_strategy -> walk_forward. Mevcut stratejiler: list_strategies.
 - Çok hisse taraması: screen_symbols (bir script adıyla ya da kaynak koduyla).

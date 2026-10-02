@@ -215,6 +215,32 @@ Asistan, [OpenRouter](https://openrouter.ai) üzerinden seçtiğiniz modeli kull
 - **Maliyet:** Kullanım ücreti OpenRouter hesabınızdan düşer; her sohbetin token sayısı ve maliyeti arayüzde gösterilir.
 - Sohbetler `~/.local/share/marketalyzer/ai/conversations/` altında saklanır. Yanıtlar sunucudan akış (SSE) olarak gelir; uzun backtestlerde tünelin bağlantıyı kesmemesi için düzenli canlılık sinyali gönderilir.
 
+## AI Strateji: sinyal araştırması, yapay zekanın yazdığı script ve kör test
+
+Web arayüzünde **Lab → AI Strateji** sayfası dört adımlı bir akış sunar. 1–8 hisse seçilir (varsayılan hedef sepet: ENKAI, TUPRS, THYAO, BIMAS, ASELS; "THY", "BIM", "ASELSAN", "TÜPRAŞ" gibi adlar koda çevrilir), bir test başlangıcı, bir bitiş ve bir eğitim süresi (1/2/3/5 yıl) belirlenir.
+
+1. **Sinyal araştırması** (`marketalyzer/research.py`): eğitim dönemindeki getiri, oynaklık, maksimum düşüş, beta, momentum/ortalamaya dönüş eğilimi (getirilerin otokorelasyonu), boşluk ve bar aralığı, gün etkisi ve likidite. Yaklaşık 35 aday sinyalin (trend, kırılım, momentum, dönüş, hacim, fiyat hareketi) ardından 5/10/20 barlık getirisi, dönem ortalamasına göre fazla getirisi, isabeti ve kaba t değeri; hisseler arası korelasyon. Yahoo emir defteri sunmadığı için "derinlik" günlük TL hacmi, sıfır hacimli gün oranı ve Amihud likidite ölçüsüyle tahmin edilir. Yalnızca test başlangıcından önceki barlar okunur.
+2. **Pine Script oluşturma** (`marketalyzer/ai/author.py`): asistan modeli (varsayılan en yeni Claude Sonnet) araştırmanın anonim özetinden (hisseler "Hisse A, B…", tarih yok) bir strateji scripti yazar. Script derlenir, örnek veride ve her hissenin eğitim barlarında denenir; derleme hatası, giriş üretmeme ya da aşırı sık giriş varsa hata modele geri verilir (en fazla 3 deneme). Sonuç `ai_<hisseler>_<tarih>` adıyla kaydedilir ve editörde açılabilir.
+3. **Kör backtest** (`marketalyzer/blind.py`): test dönemi bar bar ilerler. Stratejinin bir giriş/çıkış sinyali verdiği (isteğe bağlı olarak her 5/10/20 barda bir yeniden sorulan) barda hızlı karar modeli, **yalnızca o bara kadar kesilmiş veriden** hazırlanan anonim bir görünümle AL/BEKLE ya da SAT/TUT der. Emir sonraki barın açılışında, BIST komisyonu, BSMV ve kaymayla gerçekleşir. Sermaye hisselere eşit bölünür, yalnızca uzun pozisyon açılır. Aynı sinyallerin yapay zekasız işlenmesi ("sadece sinyaller"), al-tut ve XU100 ile karşılaştırılır.
+4. **Canlı karar:** seçili script ve modelle her hissenin son barı için karar alınır; sanal hesapta tutulan hisselere SAT/TUT, diğerlerine AL/BEKLE sorulur. Emir otomatik verilmez, emir fişi açılır.
+
+**Kör test güvenceleri.** Model hiçbir kararda karar barından sonraki veriyi görmez: veri o bara kadar kesilerek verilir, strateji sinyali de her kararda kesilmiş veri üzerinde yeniden hesaplanır ve tam veriyle farklı çıkarsa karar verilmez. Modelin hafızasındaki piyasa bilgisini kullanmaması için hisse adı, tarih ve fiyat seviyesi gönderilmez (fiyatlar yüzde ve 100 tabanlı); gönderilen her görünüm hisse kodu ve tarih için ayrıca taranır. Sonuçta bir denetim kartı karar, yeniden hesaplama, uyuşmazlık ve sızıntı sayılarını gösterir. Testler, test bitişini ileri almanın önceki kararların hiçbirini değiştirmediğini doğrular.
+
+**Hızlı karar modeli.** Kararlar küçük ve hızlı modellerle verilir; istek OpenRouter'da en düşük gecikmeli sağlayıcıya yönlendirilir (`provider.sort = latency`), sıcaklık 0'dır ve yanıt tek satır JSON'dur (`{"karar", "guven", "gerekce"}`). Ön ayarlar her ailenin OpenRouter'daki en yeni sürümüne çözülür:
+
+| Ön ayar | Aile | Not |
+|---|---|---|
+| `claude-haiku` (varsayılan) | Anthropic Claude Haiku | JSON biçimine sadık, tutarlı |
+| `gemini-flash` | Google Gemini Flash | akıl yürütme düşük |
+| `gemini-flash-lite` | Google Gemini Flash Lite | çok düşük gecikme ve maliyet |
+| `gpt-mini` / `gpt-nano` | OpenAI GPT mini / nano | akıl yürütme düşük |
+| `deepseek-flash` | DeepSeek Flash | en ucuz, akıl yürütme kapalı |
+| `qwen-flash` | Qwen Flash | ucuz alternatif |
+
+Varsayılan **Ayarlar → Karar modeli** bölümünden değiştirilir; aynı yerde **Hız testi** her ön ayara aynı örnek kararı sorup ortalama süreyi, örnek kararı ve maliyeti gösterir. Herhangi bir OpenRouter model kimliği de yazılabilir ya da `MARKETALYZER_DECISION_MODEL` ile sabitlenebilir. Bir model JSON modu veya akıl yürütme ayarını reddederse istek bir kez sade olarak tekrarlanır. Kararlar `~/.local/share/marketalyzer/ai/decisions.sqlite` dosyasında model ve görünüm anahtarıyla saklanır: aynı test tekrarlandığında aynı kararlar ücretsiz ve anında gelir (kapatılabilir).
+
+Tahmin düğmesi testten önce en fazla kaç karar gerektiğini, modelin fiyatına göre yaklaşık maliyeti ve süreyi gösterir. Asistan da `signal_study` aracıyla aynı araştırmayı sohbette kullanabilir.
+
 ## Web uygulaması ve Cloudflare tüneli
 
 Masaüstünde pencere çerçeveli, kenar çubuklu bir uygulama; telefonda alt sekme çubuğu ve alttan açılan sayfalarla yerel uygulama hissi veren bir arayüz. Kenar çubuğundaki **Piyasa / Lab** anahtarı iki çalışma alanı arasında geçiş yapar:
@@ -222,10 +248,11 @@ Masaüstünde pencere çerçeveli, kenar çubuklu bir uygulama; telefonda alt se
 - **Panel:** dot-matrix tahmini bakiye (TL/USD, gizlenebilir), günlük K/Z, pozisyon kartları (al/sat/analiz), yapay zeka kartı, özsermaye ile BIST 100 karşılaştırması, seans saatli hızlı emir kartı, tutar → lot hesaplayıcı.
 - **Piyasa:** izleme listesi, mum/çizgi grafik, fiyat grafiğine ya da ayrı panellere eklenebilen script göstergeleri, teknik özet (RSI, stokastik, ADX, Bollinger %B, 52 hafta aralığı, hacim, hareketli ortalamalar, pivot destek/direnç).
 - **Emirler / İşlem:** açık ve geçmiş emirler, pozisyonlar, dağılım, gerçekleşen işlemler, emir fişi, strateji ile işleme ve hesap ayarları. Kenar çubuğunda açık emir kartı ve seans yayı.
+- **AI Strateji:** sinyal araştırması, yapay zekaya Pine Script yazdırma, kör backtest ve canlı karar (yukarıdaki bölüm).
 - **Script editörü:** sözdizimi renklendirme, satır numaraları, otomatik tamamlama, anlık derleme ve hata satırı, parametre formu, konsol, fonksiyon başvurusu; grafikte çalıştırma, backtest, optimizasyon ve walk-forward.
 - **Backtest, Walk-forward, Tarama:** hazır stratejiler ve script stratejileriyle.
 - **Asistan:** sohbet geçmişi, araç çağrılarının canlı gösterimi, Markdown yanıtlar, scriptleri tek tıkla editörde açma, sembol ve editördeki scripti bağlam olarak ekleme.
-- **Ayarlar:** OpenRouter anahtarı, model seçimi, emir izni, görünüm.
+- **Ayarlar:** OpenRouter anahtarı, asistan modeli, karar modeli ve hız testi, emir izni, görünüm.
 
 <kbd>⌘/Ctrl</kbd>+<kbd>K</kbd> komut paletini açar (sembol, sayfa, script ve eylem araması). <kbd>B</kbd> emir, <kbd>A</kbd> asistan, <kbd>H</kbd> bakiyeleri gizle; editörde <kbd>Ctrl</kbd>+<kbd>↵</kbd> çalıştırır, <kbd>Ctrl</kbd>+<kbd>S</kbd> kaydeder.
 
@@ -275,3 +302,4 @@ Testler ağa çıkmaz. Fiyatlar sentetik veridir.
 3. **Paper trading:** SQLite tabanlı sanal hesap, bar tabanlı emir eşleştirme, strateji döngüsü, günlük ve dakikalık replay, temettü ödemeleri ve walk-forward testi. ✅ Sonraki adımlar: kısmi gerçekleşme, taban/tavan limitleri ve çok sembollü walk-forward. Gerçek zamanlıya yakın test için lisanslı bir veri kaynağı gerekir.
 4. **Script dili:** Pine Script benzeri gösterge ve stratejiler, editör, tarama. ✅
 5. **Yapay zeka katmanı:** OpenRouter üzerinden, uygulamanın araçlarıyla stratejileri yalnızca backtest ve paper trading ortamında öneren, yazan, deneyen ve değerlendiren asistan. ✅ Sonraki adımlar: zamanlanmış görevler (her akşam tarama ve özet), script alarmlarının bildirim olarak gönderilmesi, çoklu zaman dilimi (`request.security`).
+6. **AI Strateji ve kör test:** sinyal araştırması, yapay zekanın araştırmadan yazdığı Pine Script, hızlı karar modeliyle bar bar kör backtest ve sanal hesap için canlı karar. ✅ Sonraki adımlar: kör testi çoklu pencerede tekrarlama (yapay zekalı walk-forward), karar modelinin pozisyon büyüklüğü önermesi, gün içi barlarda kör test.

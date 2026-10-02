@@ -14,6 +14,7 @@ const ROUTES = [
     id: "islem", group: "piyasa", title: "İşlem", icon: "trade", load: page("trade"),
     children: [["Emir fişi", "#/islem"], ["Strateji ile işle", "#/islem/otomatik"], ["Hesap ayarları", "#/islem/hesap"]],
   },
+  { id: "strateji", group: "lab", title: "AI Strateji", icon: "target", tag: "AI", load: page("strategy") },
   { id: "lab", group: "lab", title: "Script editörü", icon: "code", load: page("lab") },
   { id: "backtest", group: "lab", title: "Backtest", icon: "flask", load: page("backtest") },
   { id: "walkforward", group: "lab", title: "Walk-forward", icon: "walk", load: page("walkforward") },
@@ -26,7 +27,8 @@ const SUBTITLES = {
   panel: "", piyasa: "Fiyatlar, göstergeler ve teknik özet", emirler: "Sanal hesabın emirleri ve işlemleri",
   islem: "Gerçek para kullanılmaz; emirler sanal hesapta eşleşir", lab: "Pine Script benzeri gösterge ve stratejiler",
   backtest: "BIST maliyetleriyle geçmiş veride test", walkforward: "Geçmişte optimize et, ileriye dönük test et",
-  tarama: "Bir scripti birçok hissede çalıştır", asistan: "OpenRouter üzerinden yapay zeka", ayarlar: "API anahtarı, model ve hesap",
+  tarama: "Bir scripti birçok hissede çalıştır",
+  strateji: "Sinyal araştırması, AI ile Pine Script ve kör backtest", asistan: "OpenRouter üzerinden yapay zeka", ayarlar: "API anahtarı, model ve hesap",
 };
 
 function parseHash() {
@@ -92,7 +94,7 @@ function renderNav(current = parseHash().route) {
   $("#nav").innerHTML = links.join("");
   $("#tabbar").innerHTML = TABS.map((id) => {
     const r = ROUTES.find((x) => x.id === id);
-    const active = r.id === current.id || (id === "lab" && ["backtest", "walkforward", "tarama"].includes(current.id));
+    const active = r.id === current.id || (id === "lab" && ["backtest", "walkforward", "tarama", "strateji"].includes(current.id));
     if (id === "asistan") {
       return `<a href="#/asistan" class="fab ${active ? "active" : ""}" aria-label="Asistan"><span class="orb">${icon("sparkle", "lg")}</span></a>`;
     }

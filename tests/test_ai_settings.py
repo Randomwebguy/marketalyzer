@@ -127,6 +127,7 @@ def test_public_settings_never_include_the_key(monkeypatch):
         "key_source": "file",
         "model": "a/b",
         "allow_trading": False,
+        "decision_model": None,
     }
     assert KEY not in json.dumps(shown)
     assert public_settings(AISettings())["key_hint"] is None
@@ -146,3 +147,13 @@ def test_failed_write_leaves_no_temp_file(monkeypatch):
         save_settings(model="a/b")
     assert [p.name for p in settings_path().parent.iterdir()] == ["settings.json"]
     assert load_settings().model is None
+
+
+def test_decision_model(monkeypatch):
+    assert save_settings(decision_model="gemini-flash").decision_model == "gemini-flash"
+    assert load_settings().decision_model == "gemini-flash"
+    assert save_settings(decision_model="").decision_model is None
+    monkeypatch.setenv("MARKETALYZER_DECISION_MODEL", "x/y")
+    assert load_settings().decision_model == "x/y"
+    with pytest.raises(ValueError):
+        save_settings(decision_model="bad model")

@@ -2,10 +2,15 @@
 import { $, api, busy, emit, esc, fmtMoney, fmtNumber, icon, state, store, toast } from "/static/js/core.js";
 
 export function render(root) {
-  const local = { settings: null, models: null, query: "", toolsOnly: true, default: null };
+  const local = {
+    settings: null, models: null, query: "", toolsOnly: true, default: null, decision: null, speed: null, testing: false,
+  };
   root.innerHTML = `
     <div class="settings">
-      <section class="card glow-violet" data-ai></section>
+      <div class="stack">
+        <section class="card glow-violet" data-ai></section>
+        <section class="card" data-decision></section>
+      </div>
       <div class="stack">
         <section class="card" data-models></section>
         <section class="card" data-display></section>
@@ -72,6 +77,48 @@ export function render(root) {
       ${local.settings?.model ? '<button class="btn small ghost" type="button" data-auto-model style="margin-top:10px">Otomatik seçime dön</button>' : ""}`;
   }
 
+  function drawDecision() {
+    const box = $("[data-decision]", root);
+    const d = local.decision;
+    const current = d?.current;
+    const price = (row) => (row.prompt_price == null ? "fiyat bilinmiyor" : `$${fmtNumber(row.prompt_price, 2)} / $${fmtNumber(row.completion_price ?? 0, 2)} · 1M token`);
+    const custom = current && d && !d.presets.some((row) => row.key === current) ? current : "";
+    const speed = local.speed;
+    box.innerHTML = `
+      <div class="card-head"><h2>Karar modeli</h2><span class="sub">Kör test ve canlı AL/SAT kararları</span></div>
+      <p class="muted small" style="margin:0 0 10px">Her sinyalde hızlı karar gerektiği için küçük, hızlı modeller kullanılır. Her aile
+        OpenRouter'daki en yeni sürüme çözülür; istek en düşük gecikmeli sağlayıcıya yönlendirilir ve yanıt tek satır JSON'dur.</p>
+      ${d ? `<div class="model-list">${d.presets.map((row) => `
+        <div class="model ${row.key === current ? "active" : ""}" data-pick-decision="${esc(row.key)}" role="button" tabindex="0">
+          <b>${esc(row.label)}${row.key === d.default ? ' <span class="chip tag sky">varsayılan</span>' : ""}</b>
+          <span class="price">${esc(price(row))}</span>
+          <code>${esc(row.model)}</code>
+          <span class="muted small">${esc(row.note)}</span>
+        </div>`).join("")}</div>
+        ${d.error ? `<p class="muted small">Model listesi alınamadı (${esc(d.error)}); bilinen sürümler gösteriliyor.</p>` : ""}
+        <form class="row-flex" data-custom-decision style="margin-top:10px">
+          <input class="input" name="model" placeholder="özel model kimliği (ör. openai/gpt-4.1-mini)" value="${esc(custom)}" style="flex:1;height:34px" aria-label="Özel karar modeli">
+          <button class="btn small" type="submit">Kaydet</button>
+        </form>` : '<div class="empty">Yükleniyor…</div>'}
+      <div class="divider"></div>
+      <div class="row-flex"><b style="font-weight:500">Hız testi</b><span class="muted small">Aynı örnek kararı her modele iki kez sorar.</span>
+        <span class="spacer"></span><button class="btn small" type="button" data-speed ${local.testing ? "disabled" : ""}>${icon("zap", "sm")} ${local.testing ? "Ölçülüyor…" : "Hız testi"}</button></div>
+      ${speed ? `<div class="table-wrap speed-table" style="margin-top:10px"><table><thead><tr>
+          <th>Model</th><th class="num">Süre</th><th>Örnek karar</th><th></th></tr></thead>
+        <tbody>${speed.map((row) => `<tr>
+          <td>${esc(row.label)}<div class="muted small">${esc(row.model)}</div></td>
+          <td class="num">${row.ok ? `<b>${fmtNumber(row.average_ms, 0)} ms</b><div class="muted small">en iyi ${fmtNumber(row.best_ms, 0)} · $${fmtNumber(row.cost ?? 0, 5)}</div>` : `<span class="error">${esc(row.error ?? "hata")}</span>`}</td>
+          <td>${row.ok ? `${esc(row.decision)} %${row.confidence ?? "—"}<div class="muted small">${esc(row.reason ?? "")}</div>` : "—"}</td>
+          <td>${row.ok && row.key !== current ? `<button class="btn small" type="button" data-pick-decision="${esc(row.key)}">Seç</button>` : ""}</td>
+        </tr>`).join("")}</tbody></table></div>
+        <p class="muted small">Süreler bu sunucudan OpenRouter'a gidiş-dönüştür; ağınıza ve sağlayıcının o anki yüküne göre değişir.</p>` : ""}`;
+  }
+
+  async function loadDecision() {
+    local.decision = await api("/api/ai/decision-models").catch(() => null);
+    drawDecision();
+  }
+
   function drawDisplay() {
     $("[data-display]", root).innerHTML = `
       <div class="card-head"><h2>Görünüm</h2></div>
@@ -104,6 +151,7 @@ export function render(root) {
     if (state.meta) state.meta.ai = local.settings;
     drawAi();
     drawModels();
+    loadDecision();
   }
 
   async function saveSettings(body, message) {
@@ -116,9 +164,16 @@ export function render(root) {
     }
     drawAi();
     drawModels();
+    if (body.decision_model !== undefined || body.api_key) loadDecision();
   }
 
   root.addEventListener("submit", async (event) => {
+    if (event.target.matches("[data-custom-decision]")) {
+      event.preventDefault();
+      const model = event.target.elements.model.value.trim();
+      await saveSettings({ decision_model: model }, model ? `Karar modeli: ${model}` : "Varsayılan karar modeli kullanılacak.");
+      return;
+    }
     if (!event.target.matches("[data-key-form]")) return;
     event.preventDefault();
     const key = event.target.elements.key.value.trim();
@@ -155,6 +210,23 @@ export function render(root) {
     } else if (t.closest("[data-pick-model]")) {
       const id = t.closest("[data-pick-model]").dataset.pickModel;
       await saveSettings({ model: id }, `Model seçildi: ${id}`);
+    } else if (t.closest("[data-pick-decision]")) {
+      const key = t.closest("[data-pick-decision]").dataset.pickDecision;
+      await saveSettings({ decision_model: key }, "Karar modeli seçildi.");
+    } else if (t.closest("[data-speed]")) {
+      if (!local.settings?.configured) {
+        toast("Önce bir OpenRouter API anahtarı kaydedin.", "error");
+        return;
+      }
+      local.testing = true;
+      drawDecision();
+      try {
+        local.speed = (await api("/api/ai/speed-test", {})).results;
+      } catch (error) {
+        toast(error.message, "error");
+      }
+      local.testing = false;
+      drawDecision();
     } else if (t.closest("[data-auto-model]")) {
       await saveSettings({ model: "" }, "Model otomatik seçilecek.");
     } else if (t.closest("[data-scroll-models]")) {
@@ -199,7 +271,16 @@ export function render(root) {
     input.setSelectionRange(position, position);
   });
 
+  root.addEventListener("keydown", (event) => {
+    const row = event.target.closest(".model[data-pick-decision]");
+    if (row && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      row.click();
+    }
+  });
+
   drawAi();
+  drawDecision();
   drawModels();
   drawDisplay();
   drawApp();

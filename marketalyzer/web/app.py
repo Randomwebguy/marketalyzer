@@ -28,14 +28,17 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from marketalyzer import services
-from marketalyzer.ai.chat import ChatError, ChatRunner
+from marketalyzer import blind, research, services
+from marketalyzer.ai import decide
+from marketalyzer.ai.author import author_script
+from marketalyzer.ai.chat import ChatError, ChatRunner, resolve_model
 from marketalyzer.ai.conversations import (
     delete_conversation,
     display_messages,
     list_conversations,
     load_conversation,
 )
+from marketalyzer.ai.jobs import JobError, JobRunner
 from marketalyzer.ai.openrouter import (
     OpenRouterError,
     key_info,
@@ -170,8 +173,79 @@ class AISettingsRequest(BaseModel):
 
     api_key: str | None = Field(None, max_length=200)
     model: str | None = Field(None, max_length=200)
+    decision_model: str | None = Field(None, max_length=200)
     allow_trading: bool | None = None
     clear_key: bool = False
+
+
+class StudyRequest(BaseModel):
+    """Signal research on 1-8 symbols up to a cutoff date."""
+
+    symbols: list[str] = Field(min_length=1, max_length=research.MAX_SYMBOLS)
+    cutoff: date | None = None
+    years: float = Field(2, ge=0.25, le=10)
+    interval: Literal["1d", "1W", "1h"] = "1d"
+
+
+class AuthorRequest(StudyRequest):
+    """Have the model write a strategy script from a study."""
+
+    goal: str | None = Field(None, max_length=1000)
+    name: str | None = Field(None, max_length=48)
+
+
+class BlindRequest(Costs):
+    """A blind backtest."""
+
+    symbols: list[str] = Field(min_length=1, max_length=research.MAX_SYMBOLS)
+    start: date
+    end: date | None = None
+    script: str | None = None
+    source: str | None = Field(None, max_length=50_000)
+    inputs: dict[str, float | str | bool] = Field(default_factory=dict)
+    mode: Literal["ai", "signals"] = "ai"
+    review_every: Literal[0, 5, 10, 20] = 0
+    years: float = Field(2, ge=0.5, le=10)
+    interval: Literal["1d", "1W"] = "1d"
+    stop_loss_pct: float | None = Field(None, gt=0, lt=50)
+    decision_model: str | None = Field(None, max_length=200)
+    use_cache: bool = True
+
+    def config(self) -> blind.BlindConfig:
+        """Return the engine's config for this request."""
+        return blind.BlindConfig(
+            symbols=self.symbols,
+            start=self.start,
+            end=self.end or services.today(),
+            script=self.script,
+            source=self.source,
+            inputs=dict(self.inputs),
+            mode=self.mode,
+            review_every=self.review_every,
+            years=self.years,
+            interval=self.interval,
+            cash=self.cash,
+            costs=self.costs(),
+            slippage=self.slippage,
+            stop_loss_pct=self.stop_loss_pct,
+        )
+
+
+class LiveRequest(BaseModel):
+    """Decisions on the latest bar, for paper trading."""
+
+    symbols: list[str] = Field(min_length=1, max_length=research.MAX_SYMBOLS)
+    script: str | None = None
+    source: str | None = Field(None, max_length=50_000)
+    inputs: dict[str, float | str | bool] = Field(default_factory=dict)
+    decision_model: str | None = Field(None, max_length=200)
+    years: float = Field(2, ge=0.5, le=10)
+
+
+class SpeedTestRequest(BaseModel):
+    """Time the decision model presets."""
+
+    keys: list[str] | None = Field(None, max_length=len(decide.PRESETS) + 1)
 
 
 class ChatRequest(BaseModel):
@@ -218,6 +292,8 @@ def create_app(
     paper_path = account_path(account_name)
     chat = ChatRunner(paper_path, demo)
     app.state.chat = chat
+    jobs = JobRunner()
+    app.state.jobs = jobs
 
     def authorized(request: Request) -> bool:
         header = request.headers.get("authorization", "")
@@ -550,6 +626,8 @@ def create_app(
             changes["model"] = request.model
         if request.allow_trading is not None:
             changes["allow_trading"] = request.allow_trading
+        if request.decision_model is not None:
+            changes["decision_model"] = request.decision_model
         try:
             settings = save_settings(**changes, clear_key=request.clear_key)
         except ValueError as error:
@@ -650,5 +728,217 @@ def create_app(
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    # AI strategy lab ----------------------------------------------------------
+
+    def api_key() -> str:
+        settings = load_settings()
+        if not settings.api_key:
+            raise HTTPException(
+                400,
+                "OpenRouter API anahtarı ayarlanmamış. Ayarlar > Yapay zeka bölümünden"
+                " anahtarınızı ekleyin.",
+            )
+        return settings.api_key
+
+    def job_stream(kind: str, work) -> StreamingResponse:
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+        def emit(event: dict[str, Any]) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, event)
+
+        try:
+            job_id, cancel = jobs.start(kind, work, emit)
+        except JobError as error:
+            raise HTTPException(error.status, error.message) from error
+
+        async def events():
+            try:
+                yield _sse({"type": "start", "job_id": job_id, "kind": kind})
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), KEEPALIVE_SECONDS)
+                    except asyncio.TimeoutError:
+                        yield ": keepalive\n\n"
+                        continue
+                    yield _sse(event)
+                    if event.get("type") == "done":
+                        break
+            finally:
+                cancel.set()
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    def decider_for(choice: str | None, use_cache: bool = True):
+        settings = load_settings()
+        key = api_key()
+        return decide.make_decider(
+            key, choice or settings.decision_model, use_cache=use_cache
+        )
+
+    def model_brief(decider, info: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": decider.model,
+            "name": info.get("name") or decider.model,
+            "preset": decider.preset.label if decider.preset else None,
+            "prompt_price": info.get("prompt_price"),
+            "completion_price": info.get("completion_price"),
+        }
+
+    @app.get("/api/lab/catalog")
+    def lab_catalog() -> dict[str, Any]:
+        return {
+            "signals": [signal.describe() for signal in research.SIGNALS],
+            "max_symbols": research.MAX_SYMBOLS,
+            "review_choices": list(blind.REVIEW_CHOICES),
+            "depth_note": research.DEPTH_NOTE,
+        }
+
+    @app.post("/api/lab/study")
+    def lab_study(request: StudyRequest) -> dict[str, Any]:
+        try:
+            return research.study(
+                request.symbols, request.cutoff, request.years, request.interval
+            )
+        except ValueError as error:
+            raise _fail(error) from error
+
+    @app.post("/api/lab/author")
+    async def lab_author(request: AuthorRequest) -> StreamingResponse:
+        key = api_key()
+        settings = load_settings()
+        try:
+            model = await asyncio.to_thread(resolve_model, key, settings.model)
+        except (ChatError, OpenRouterError) as error:
+            raise HTTPException(400, error.message) from error
+
+        def work(emit, cancelled):
+            emit({"type": "model", "model": model})
+            return author_script(
+                request.symbols,
+                cutoff=request.cutoff.isoformat() if request.cutoff else None,
+                years=request.years,
+                api_key=key,
+                model=model,
+                emit=emit,
+                cancelled=cancelled,
+                goal=request.goal,
+                name=request.name or None,
+                interval=request.interval,
+            )
+
+        return job_stream("author", work)
+
+    @app.post("/api/lab/estimate")
+    def lab_estimate(request: BlindRequest) -> dict[str, Any]:
+        config = request.config()
+        try:
+            config.check()
+            script = services._script(config.script, config.source)
+            data, _ = blind.load(config, script)
+        except (ValueError, ScriptError) as error:
+            raise _fail(error) from error
+        plan = blind.estimate(config, data)
+        body: dict[str, Any] = {**plan, "mode": config.mode}
+        if config.mode == "ai":
+            settings = load_settings()
+            body["configured"] = bool(settings.api_key)
+            try:
+                models = list_models(settings.api_key)
+            except OpenRouterError:
+                models = None
+            model_id, preset = decide.resolve_model(
+                request.decision_model or settings.decision_model, models
+            )
+            info = decide.model_info(model_id, models)
+            body["model"] = {
+                "id": model_id,
+                "preset": preset.label if preset else None,
+                "prompt_price": info.get("prompt_price"),
+                "completion_price": info.get("completion_price"),
+            }
+            body["cost_usd"] = decide.estimate_cost(info, plan["decisions"])
+            parallel = min(4, len(data))
+            body["seconds"] = round(plan["decisions"] * 1.2 / parallel)
+        return body
+
+    @app.post("/api/lab/blind")
+    async def lab_blind(request: BlindRequest) -> StreamingResponse:
+        config = request.config()
+        try:
+            config.check()
+        except ValueError as error:
+            raise _fail(error) from error
+        decider = None
+        model = None
+        if config.mode == "ai":
+            decider, info = await asyncio.to_thread(
+                decider_for, request.decision_model, request.use_cache
+            )
+            model = model_brief(decider, info)
+
+        def work(emit, cancelled):
+            if model:
+                emit({"type": "model", "model": model})
+            return blind.run_blind(
+                config, decider, emit=emit, cancelled=cancelled, model=model
+            )
+
+        return job_stream("blind", work)
+
+    @app.post("/api/lab/jobs/{job_id}/stop")
+    def lab_stop(job_id: str) -> dict[str, Any]:
+        return {"stopped": jobs.stop(job_id)}
+
+    @app.post("/api/lab/live")
+    def lab_live(request: LiveRequest) -> dict[str, Any]:
+        decider, info = decider_for(request.decision_model, use_cache=False)
+        holdings: dict[str, dict[str, Any]] = {}
+        if paper_path.exists():
+            with PaperAccount(paper_path) as account:
+                for position in account.positions():
+                    buys = [
+                        f for f in account.fills(position.symbol) if f.side == "buy"
+                    ]
+                    holdings[position.symbol] = {
+                        "qty": position.qty,
+                        "avg_cost": position.avg_cost,
+                        "since": buys[-1].time if buys else None,
+                    }
+        try:
+            script = services._script(request.script, request.source)
+            rows = blind.decide_now(
+                request.symbols,
+                script,
+                decider,
+                inputs=dict(request.inputs),
+                holdings=holdings,
+                years=request.years,
+            )
+        except (ValueError, ScriptError) as error:
+            raise _fail(error) from error
+        return {"model": model_brief(decider, info), "decisions": rows}
+
+    @app.get("/api/ai/decision-models")
+    def ai_decision_models() -> dict[str, Any]:
+        settings = load_settings()
+        body = decide.presets(settings.api_key)
+        body["current"] = settings.decision_model or decide.DEFAULT_PRESET
+        return body
+
+    @app.post("/api/ai/speed-test")
+    def ai_speed_test(request: SpeedTestRequest) -> dict[str, Any]:
+        key = api_key()
+        keys = request.keys or None
+        if keys:
+            keys = [k.strip() for k in keys if k and k.strip()][
+                : len(decide.PRESETS) + 1
+            ]
+        return {"results": decide.speed_test(key, keys)}
 
     return app

@@ -1,0 +1,800 @@
+"""Blind backtest: trade bar by bar, deciding only from what was known then.
+
+Between ``start`` and ``end`` the test walks forward one bar at a time. On a
+bar where the strategy script signals (or a periodic review is due), the
+decision maker gets the bars up to and including that bar, cut from the data,
+and nothing later. Its order fills at the next bar's open. The script's signal
+is recomputed on the cut data before every decision, so a script that looked
+ahead would be caught; the language model also never sees the ticker, the
+dates or the price level, so it cannot recall what happened next.
+
+Each symbol trades its own equal share of the cash, long only. The same
+signals are also traded without the AI ("signals") and held from the first
+bar ("hold"), to show what the AI added.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import re
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from datetime import date, timedelta
+from typing import Any
+
+import numpy as np
+import pandas as pd
+
+from marketalyzer import research
+from marketalyzer.ai.decide import (
+    Decider,
+    position_view,
+    script_view,
+    snapshot,
+)
+from marketalyzer.backtest.costs import BistCosts, tick_size
+from marketalyzer.scripting import Script
+from marketalyzer.services import (
+    _parse_date,
+    _script,
+    number,
+    stamp,
+    thin,
+    today,
+)
+
+MAX_DECISIONS = 800
+REVIEW_CHOICES = (0, 5, 10, 20)
+BLIND_INTERVALS = ("1d", "1W")
+MODES = ("ai", "signals")
+EVENTS = {"entry": "giriş", "exit": "çıkış", "review": "gözden geçirme"}
+_DATE = re.compile(r"\b(19|20)\d\d-\d\d-\d\d\b")
+
+
+class Cancelled(Exception):
+    """The person stopped the test."""
+
+
+@dataclass
+class BlindConfig:
+    """What to test: symbols, period, strategy script and who decides."""
+
+    symbols: list[str]
+    start: date
+    end: date
+    script: str | None = None
+    source: str | None = None
+    inputs: dict[str, Any] = field(default_factory=dict)
+    mode: str = "ai"
+    review_every: int = 0
+    years: float = 2.0
+    interval: str = "1d"
+    cash: float = 100_000.0
+    costs: BistCosts = field(default_factory=BistCosts)
+    slippage: float = 0.001
+    stop_loss_pct: float | None = None
+
+    def check(self) -> None:
+        """Raise ValueError (in Turkish) for settings that cannot run."""
+        if self.mode not in MODES:
+            raise ValueError("Karar modu 'ai' ya da 'signals' olmalı.")
+        if self.interval not in BLIND_INTERVALS:
+            raise ValueError(f"Kör test zaman dilimi: {', '.join(BLIND_INTERVALS)}.")
+        if self.review_every not in REVIEW_CHOICES:
+            raise ValueError("Gözden geçirme aralığı 0, 5, 10 ya da 20 bar olmalı.")
+        if self.start >= self.end:
+            raise ValueError("Test başlangıcı bitişten önce olmalı.")
+        if self.end > today():
+            raise ValueError("Test bitişi bugünden sonra olamaz.")
+        if self.stop_loss_pct is not None and not 0 < self.stop_loss_pct < 50:
+            raise ValueError("Zarar durdur yüzdesi 0 ile 50 arasında olmalı.")
+        if not self.script and not self.source:
+            raise ValueError("Bir strateji scripti seçin.")
+
+
+@dataclass
+class Data:
+    """One symbol's bars (warm-up, training and test) and its signals."""
+
+    code: str
+    frame: pd.DataFrame
+    first: int  # first test bar
+    train_first: int  # first training bar
+    result: Any  # the script's run over all bars
+    training: dict[str, dict[str, Any]]  # catalog signal stats before ``first``
+
+    @property
+    def test_bars(self) -> int:
+        """Return how many bars the test covers."""
+        return len(self.frame) - self.first
+
+
+def _edges(mask: np.ndarray | None, n: int) -> np.ndarray:
+    if mask is None:
+        return np.zeros(n, dtype=bool)
+    mask = np.asarray(mask, dtype=bool)
+    return mask & ~np.r_[False, mask[:-1]]
+
+
+def load(config: BlindConfig, script: Script) -> tuple[list[Data], pd.DataFrame | None]:
+    """Load every symbol up to ``end`` (never later) and run the script once.
+
+    The script's full run only marks the bars where something may happen; the
+    decision itself is made on data cut at that bar.
+    """
+    codes = research._codes(config.symbols)
+    train_start = config.start - timedelta(days=round(config.years * 365.25))
+    frames, benchmark = research.load_study_frames(
+        codes, train_start, config.end, config.interval
+    )
+    data = []
+    for code in codes:
+        frame, shown = frames[code]
+        index = pd.DatetimeIndex(frame.index)
+        first = int(np.searchsorted(index, pd.Timestamp(config.start, tz=index.tz)))
+        if first >= len(frame) - 1:
+            raise ValueError(f"{code}: test döneminde yeterli bar yok.")
+        train_first = int(np.searchsorted(index, shown)) if shown is not None else 0
+        if first - train_first < research.MIN_BARS:
+            raise ValueError(
+                f"{code}: test başlangıcından önce en az {research.MIN_BARS} bar"
+                " gerekli; eğitim süresini uzatın ya da başlangıcı ileri alın."
+            )
+        result = script.run(frame, config.inputs, symbol=code, interval=config.interval)
+        if result.entries is None:
+            raise ValueError(
+                "Seçilen script bir strateji değil; strategy() ile bildirilmiş ve"
+                " strategy.entry kullanan bir script seçin."
+            )
+        training_frame = frame.iloc[:first]
+        stats = research.signal_stats(research.indicators(training_frame), train_first)
+        data.append(
+            Data(code, frame, first, train_first, result, {s["key"]: s for s in stats})
+        )
+    return data, benchmark
+
+
+@dataclass
+class _Account:
+    cash: float
+    qty: int = 0
+    entry_price: float = 0.0
+    entry_time: Any = None
+    entry_bar: int = 0
+    peak: float = 0.0
+    stop: float = math.nan
+    limit: float = math.nan
+    entry_note: dict[str, Any] = field(default_factory=dict)
+    fees: float = 0.0
+
+
+class Simulation:
+    """Trade one symbol over its test bars.
+
+    ``decide`` is None for the signals-only run; otherwise it receives the
+    snapshot of a cut frame and returns a decision dict.
+    """
+
+    def __init__(
+        self,
+        data: Data,
+        config: BlindConfig,
+        allocation: float,
+        benchmark: pd.DataFrame | None = None,
+        decide: Callable[[dict[str, Any]], Any] | None = None,
+        on_decision: Callable[[dict[str, Any]], None] | None = None,
+        cancelled: Callable[[], bool] = lambda: False,
+        script: Script | None = None,
+    ):
+        self.data = data
+        self.config = config
+        self.benchmark = benchmark
+        self.decide = decide
+        self.on_decision = on_decision
+        self.cancelled = cancelled
+        self.script = script
+        self.account = _Account(cash=allocation)
+        self.allocation = allocation
+        self.trades: list[dict[str, Any]] = []
+        self.decisions: list[dict[str, Any]] = []
+        self.equity: list[tuple[Any, float]] = []
+        self.exposure = 0
+        self.audit = {"decisions": 0, "rechecks": 0, "mismatches": 0, "leaks": 0}
+
+    # Orders -----------------------------------------------------------------------
+
+    def _buy(self, i: int, note: dict[str, Any]) -> None:
+        frame, account, config = self.data.frame, self.account, self.config
+        price = float(frame["Open"].iloc[i]) * (1 + config.slippage / 2)
+        per_share = price * (1 + config.costs.effective_rate)
+        qty = int(account.cash // per_share)
+        if qty <= 0:
+            return
+        fee = config.costs(qty, price)
+        account.cash -= qty * price + fee
+        account.qty = qty
+        account.entry_price = price
+        account.entry_time = frame.index[i]
+        account.entry_bar = i
+        account.peak = price
+        account.fees = fee
+        account.entry_note = note
+        self._set_levels(i - 1, fresh=True)
+
+    def _sell(self, i: int, price: float, reason: str) -> None:
+        frame, account, config = self.data.frame, self.account, self.config
+        price *= 1 - config.slippage / 2
+        fee = config.costs(account.qty, price)
+        account.cash += account.qty * price - fee
+        cost = account.qty * account.entry_price
+        pnl = account.qty * (price - account.entry_price) - account.fees - fee
+        self.trades.append(
+            {
+                "symbol": self.data.code,
+                "entry_time": stamp(account.entry_time),
+                "exit_time": stamp(frame.index[i]),
+                "qty": account.qty,
+                "entry_price": number(account.entry_price),
+                "exit_price": number(price),
+                "pnl": number(pnl, 2),
+                "return_pct": number(pnl / cost * 100, 2) if cost else None,
+                "bars": i - account.entry_bar,
+                "exit_reason": reason,
+                "confidence": account.entry_note.get("confidence"),
+            }
+        )
+        account.qty = 0
+        account.stop = account.limit = math.nan
+
+    def _set_levels(self, i: int, fresh: bool = False) -> None:
+        """Carry the script's stop and target levels known at bar ``i``'s close."""
+        result, account = self.data.result, self.account
+        if fresh:
+            account.stop = account.limit = math.nan
+        if i < 0:
+            return
+        arrays = (result.stops, result.limits, result.loss_ticks, result.profit_ticks)
+        stop, limit, loss, profit = (
+            float(values[i]) if values is not None else math.nan for values in arrays
+        )
+        if not math.isfinite(stop) and math.isfinite(loss) and account.entry_price:
+            stop = account.entry_price - loss * tick_size(account.entry_price)
+        if not math.isfinite(limit) and math.isfinite(profit) and account.entry_price:
+            limit = account.entry_price + profit * tick_size(account.entry_price)
+        if math.isfinite(stop):
+            account.stop = stop
+        if math.isfinite(limit):
+            account.limit = limit
+        if self.config.stop_loss_pct and account.entry_price:
+            floor = account.entry_price * (1 - self.config.stop_loss_pct / 100)
+            account.stop = (
+                max(account.stop, floor) if math.isfinite(account.stop) else floor
+            )
+
+    def _exits_inside_bar(self, i: int) -> None:
+        """Fill the stop or the target if this bar reached it (stop first)."""
+        account = self.account
+        frame = self.data.frame
+        o, h, low = (float(frame[k].iloc[i]) for k in ("Open", "High", "Low"))
+        if math.isfinite(account.stop):
+            if o <= account.stop:
+                self._sell(i, o, "zarar durdur (boşluk)")
+                return
+            if low <= account.stop:
+                self._sell(i, account.stop, "zarar durdur")
+                return
+        if math.isfinite(account.limit):
+            if o >= account.limit:
+                self._sell(i, o, "kâr al (boşluk)")
+            elif h >= account.limit:
+                self._sell(i, account.limit, "kâr al")
+
+    # Decisions --------------------------------------------------------------------
+
+    def _view(self, i: int, event: str) -> tuple[dict[str, Any], Any]:
+        """Build the decision snapshot from the bars up to ``i`` only."""
+        frame = self.data.frame
+        cut = frame.iloc[: i + 1]
+        assert cut.index[-1] == frame.index[i]  # noqa: S101 - the blindness rule
+        result = self.script.run(
+            cut,
+            self.config.inputs,
+            symbol=self.data.code,
+            interval=self.config.interval,
+        )
+        self.audit["rechecks"] += 1
+        benchmark = None
+        if self.benchmark is not None:
+            benchmark = self.benchmark[self.benchmark.index <= frame.index[i]]
+        close = float(cut["Close"].iloc[-1])
+        account = self.account
+        position = None
+        if account.qty:
+            position = position_view(
+                account.entry_price, close, i - account.entry_bar, account.peak
+            )
+        view = snapshot(
+            cut,
+            benchmark=benchmark,
+            script=script_view(result, close, EVENTS[event]),
+            position=position,
+            training=self.data.training,
+        )
+        return view, result
+
+    def _leaks(self, view: dict[str, Any]) -> bool:
+        """Check that the snapshot names neither the stock nor a date."""
+        text = json.dumps(view, ensure_ascii=False)
+        ticker = re.compile(rf"\b{re.escape(self.data.code)}\b")
+        return bool(ticker.search(text) or _DATE.search(text))
+
+    def _event(self, i: int, entries: np.ndarray, exits: np.ndarray) -> str | None:
+        account = self.account
+        if not account.qty and entries[i]:
+            return "entry"
+        if account.qty and exits[i]:
+            return "exit"
+        every = self.config.review_every
+        if self.decide is None or not every:
+            return None
+        since = i - (
+            self.decisions[-1]["bar"] if self.decisions else self.data.first - 1
+        )
+        raw = self.data.result.entries
+        if since >= every and (account.qty or (raw is not None and raw[i])):
+            return "review"
+        return None
+
+    def _decision(self, i: int, event: str) -> str | None:
+        """Return "buy", "sell" or None for an event on bar ``i``."""
+        if self.decide is None:
+            return {"entry": "buy", "exit": "sell"}.get(event)
+        view, cut_result = self._view(i, event)
+        if event in ("entry", "exit"):
+            flags = cut_result.entries if event == "entry" else cut_result.exits
+            full = (
+                self.data.result.entries if event == "entry" else self.data.result.exits
+            )
+            if bool(flags[-1]) != bool(full[i]):
+                self.audit["mismatches"] += 1
+                return None
+        if self._leaks(view):
+            self.audit["leaks"] += 1
+            return None
+        decision = self.decide(view)
+        self.audit["decisions"] += 1
+        record = {
+            "bar": i,
+            "time": stamp(self.data.frame.index[i]),
+            "symbol": self.data.code,
+            "event": EVENTS[event],
+            "signals": [item["aciklama"] for item in view["aktif_sinyaller"]],
+            "close": number(self.data.frame["Close"].iloc[i]),
+            "data_end": stamp(self.data.frame.index[i]),
+            **decision.to_dict(),
+        }
+        self.decisions.append(record)
+        if self.on_decision:
+            self.on_decision(record)
+        if decision.action in ("buy", "sell"):
+            return decision.action
+        return None
+
+    # Run --------------------------------------------------------------------------
+
+    def run(self) -> Simulation:
+        """Walk the test bars; return self with trades, decisions and equity."""
+        frame, account = self.data.frame, self.account
+        n = len(frame)
+        entries = _edges(self.data.result.entries, n)
+        exits = _edges(self.data.result.exits, n)
+        close = frame["Close"].to_numpy(dtype=float)
+        high = frame["High"].to_numpy(dtype=float)
+        pending: tuple[str, dict[str, Any]] | None = None
+        for i in range(self.data.first, n):
+            if self.cancelled():
+                raise Cancelled
+            if pending:
+                action, note = pending
+                if action == "buy" and not account.qty:
+                    self._buy(i, note)
+                elif action == "sell" and account.qty:
+                    self._sell(i, float(frame["Open"].iloc[i]), "sinyal")
+                pending = None
+            if account.qty:
+                self._exits_inside_bar(i)
+            if account.qty:
+                account.peak = max(account.peak, high[i])
+                self.exposure += 1
+                self._set_levels(i)
+            if i < n - 1:  # A decision on the last bar could not be filled.
+                event = self._event(i, entries, exits)
+                if event and len(self.decisions) < MAX_DECISIONS:
+                    action = self._decision(i, event)
+                    if action:
+                        note = self.decisions[-1] if self.decide else {}
+                        pending = (action, note)
+            self.equity.append((frame.index[i], account.cash + account.qty * close[i]))
+        if account.qty:
+            self._sell(n - 1, close[n - 1], "dönem sonu (açık)")
+            self.trades[-1]["open"] = True
+        return self
+
+
+# --- Results ----------------------------------------------------------------------
+
+
+def metrics(
+    curve: pd.Series,
+    trades: list[dict[str, Any]],
+    per_year: int,
+    exposure: float,
+    initial: float,
+) -> dict[str, Any]:
+    """Summary statistics of an equity curve that started at ``initial``."""
+    values = pd.concat([pd.Series([initial]), curve.reset_index(drop=True)])
+    final = float(values.iloc[-1])
+    returns = values.pct_change().dropna()
+    sharpe = None
+    if len(returns) > 2 and returns.std() > 0:
+        sharpe = number(returns.mean() / returns.std() * math.sqrt(per_year), 2)
+    wins = [t for t in trades if (t["pnl"] or 0) > 0]
+    gains = sum(t["pnl"] for t in wins)
+    losses = -sum(t["pnl"] for t in trades if (t["pnl"] or 0) < 0)
+    return {
+        "return_pct": number((final / initial - 1) * 100, 2),
+        "equity_final": number(final, 2),
+        "max_drawdown_pct": number(
+            float((values / values.cummax() - 1).min()) * 100, 2
+        ),
+        "sharpe": sharpe,
+        "trades": len(trades),
+        "win_rate_pct": number(len(wins) / len(trades) * 100, 1) if trades else None,
+        "profit_factor": number(gains / losses, 2) if losses else None,
+        "avg_trade_pct": number(
+            sum(t["return_pct"] or 0 for t in trades) / len(trades), 2
+        )
+        if trades
+        else None,
+        "exposure_pct": number(exposure * 100, 1),
+    }
+
+
+def _portfolio(sims: list[Simulation], cash: float) -> pd.Series:
+    curves = [
+        pd.Series(dict(sim.equity)).rename(sim.data.code) for sim in sims if sim.equity
+    ]
+    joined = pd.concat(curves, axis=1).sort_index().ffill()
+    for sim in sims:
+        joined[sim.data.code] = joined[sim.data.code].fillna(sim.allocation)
+    return joined.sum(axis=1)
+
+
+def _hold_curve(data: Data, config: BlindConfig, allocation: float) -> pd.Series:
+    frame = data.frame.iloc[data.first :]
+    price = float(frame["Open"].iloc[0]) * (1 + config.slippage / 2)
+    qty = int(allocation // (price * (1 + config.costs.effective_rate)))
+    rest = allocation - qty * price - (config.costs(qty, price) if qty else 0)
+    return (rest + qty * frame["Close"]).rename(data.code)
+
+
+def _points(curve: pd.Series) -> list[dict[str, Any]]:
+    return thin([{"t": stamp(t), "v": number(v, 2)} for t, v in curve.items()])
+
+
+def _exposure(sims: list[Simulation]) -> float:
+    bars = sum(sim.data.test_bars for sim in sims)
+    return sum(sim.exposure for sim in sims) / bars if bars else 0.0
+
+
+def summarize(
+    config: BlindConfig,
+    data: list[Data],
+    benchmark: pd.DataFrame | None,
+    signal_sims: list[Simulation],
+    ai_sims: list[Simulation] | None,
+    model: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build the result: AI, signals-only and hold, overall and per symbol."""
+    per_year = research.BARS_PER_YEAR.get(config.interval, 252)
+    allocation = config.cash / len(data)
+    hold_curves = [_hold_curve(d, config, allocation) for d in data]
+    hold = (
+        pd.concat(hold_curves, axis=1)
+        .sort_index()
+        .ffill()
+        .fillna(allocation)
+        .sum(axis=1)
+    )
+    signals_curve = _portfolio(signal_sims, config.cash)
+    signal_trades = [t for sim in signal_sims for t in sim.trades]
+    result: dict[str, Any] = {
+        "period": {
+            "train_start": stamp(data[0].frame.index[data[0].train_first]),
+            "start": stamp(min(d.frame.index[d.first] for d in data)),
+            "end": stamp(max(d.frame.index[-1] for d in data)),
+            "bars": max(d.test_bars for d in data),
+        },
+        "config": {
+            "symbols": [d.code for d in data],
+            "script": config.script or "editör scripti",
+            "mode": config.mode,
+            "review_every": config.review_every,
+            "interval": config.interval,
+            "cash": config.cash,
+            "stop_loss_pct": config.stop_loss_pct,
+            "inputs": config.inputs,
+        },
+        "signals": {
+            **metrics(
+                signals_curve,
+                signal_trades,
+                per_year,
+                _exposure(signal_sims),
+                config.cash,
+            ),
+            "equity": _points(signals_curve),
+        },
+        "hold": {
+            **metrics(hold, [], per_year, 1.0, config.cash),
+            "equity": _points(hold),
+        },
+        "signal_trades": signal_trades,
+    }
+    if benchmark is not None and not benchmark.empty:
+        start = min(d.frame.index[d.first] for d in data)
+        index_close = benchmark["Close"][benchmark.index >= start]
+        # On the portfolio's dates, so every curve shares one time axis.
+        index_close = index_close.reindex(hold.index, method="ffill").dropna()
+        if len(index_close) > 1:
+            scaled = index_close / index_close.iloc[0] * config.cash
+            result["benchmark"] = {
+                "symbol": research.BENCHMARK,
+                "return_pct": number(
+                    (index_close.iloc[-1] / index_close.iloc[0] - 1) * 100, 2
+                ),
+                "equity": _points(scaled),
+            }
+    symbols = []
+    for k, d in enumerate(data):
+        row = {
+            "symbol": d.code,
+            "hold_return_pct": number(
+                (hold_curves[k].iloc[-1] / allocation - 1) * 100, 2
+            ),
+            "signals_return_pct": number(
+                (signal_sims[k].equity[-1][1] / allocation - 1) * 100, 2
+            ),
+            "signals_trades": len(signal_sims[k].trades),
+        }
+        if ai_sims:
+            row["ai_return_pct"] = number(
+                (ai_sims[k].equity[-1][1] / allocation - 1) * 100, 2
+            )
+            row["ai_trades"] = len(ai_sims[k].trades)
+        symbols.append(row)
+    result["symbols"] = symbols
+    if ai_sims:
+        curve = _portfolio(ai_sims, config.cash)
+        trades = [t for sim in ai_sims for t in sim.trades]
+        decisions = [d for sim in ai_sims for d in sim.decisions]
+        decisions.sort(key=lambda d: (d["time"], d["symbol"]))
+        live = [d for d in decisions if not d["cached"] and not d["error"]]
+        audit = {
+            key: sum(sim.audit[key] for sim in ai_sims)
+            for key in ("decisions", "rechecks", "mismatches", "leaks")
+        }
+        result["ai"] = {
+            **metrics(curve, trades, per_year, _exposure(ai_sims), config.cash),
+            "equity": _points(curve),
+            "decisions": len(decisions),
+            "buys": sum(d["action"] == "buy" for d in decisions),
+            "sells": sum(d["action"] == "sell" for d in decisions),
+            "holds": sum(d["action"] == "hold" for d in decisions),
+            "errors": sum(bool(d["error"]) for d in decisions),
+            "cached": sum(d["cached"] for d in decisions),
+            "avg_latency_ms": round(sum(d["latency_ms"] for d in live) / len(live))
+            if live
+            else None,
+            "cost_usd": number(sum(d["cost"] for d in decisions), 4),
+            "model": model,
+        }
+        result["trades"] = trades
+        for decision in decisions:
+            decision.pop("bar", None)
+        result["decisions"] = decisions
+        result["audit"] = {
+            **audit,
+            "blind": audit["mismatches"] == 0 and audit["leaks"] == 0,
+            "notes": [
+                "Her kararda model yalnızca karar barına kadar kesilmiş veriyi gördü;"
+                " emir bir sonraki barın açılışında gerçekleşti.",
+                "Strateji sinyali her kararda kesilmiş veri üzerinde yeniden"
+                f" hesaplandı ({audit['rechecks']} kez); tam veriyle farklı çıkan"
+                f" sinyal sayısı: {audit['mismatches']}.",
+                "Modele hisse adı, tarih ve fiyat seviyesi gönderilmedi (fiyatlar"
+                f" yüzde ve 100 tabanlı); kontrolde yakalanan sızıntı: {audit['leaks']}.",
+                "Eğitim istatistikleri yalnızca test başlangıcından önceki barlardan"
+                " hesaplandı.",
+            ],
+        }
+    return result
+
+
+def estimate(config: BlindConfig, data: list[Data]) -> dict[str, Any]:
+    """Count the signal events in the test period: the decisions to expect.
+
+    Entry signals while already holding and exit signals while flat need no
+    decision, so the count of entries plus exits is an upper bound.
+    """
+    events = 0
+    rows = []
+    for d in data:
+        n = len(d.frame)
+        entries = _edges(d.result.entries, n)[d.first : n - 1]
+        exits = _edges(d.result.exits, n)[d.first : n - 1]
+        reviews = d.test_bars // config.review_every if config.review_every else 0
+        count = int(entries.sum() + exits.sum()) + reviews
+        events += count
+        rows.append(
+            {
+                "symbol": d.code,
+                "entries": int(entries.sum()),
+                "exits": int(exits.sum()),
+                "reviews": reviews,
+                "bars": d.test_bars,
+            }
+        )
+    return {"decisions": min(events, MAX_DECISIONS * len(data)), "symbols": rows}
+
+
+def run_blind(
+    config: BlindConfig,
+    decider: Decider | None = None,
+    *,
+    emit: Callable[[dict[str, Any]], None] = lambda event: None,
+    cancelled: Callable[[], bool] = lambda: False,
+    model: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run the blind test and return the results (see ``summarize``)."""
+    config.check()
+    if config.mode == "ai" and decider is None:
+        raise ValueError("Yapay zeka modu için karar modeli gerekli.")
+    script = _script(config.script, config.source)
+    emit({"type": "stage", "stage": "loading", "message": "Veriler yükleniyor"})
+    data, benchmark = load(config, script)
+    allocation = config.cash / len(data)
+    signal_sims = [
+        Simulation(d, config, allocation, benchmark, script=script).run() for d in data
+    ]
+    ai_sims = None
+    if config.mode == "ai":
+        plan = estimate(config, data)
+        emit({"type": "plan", **plan})
+        emit({"type": "stage", "stage": "deciding", "message": "Model karar veriyor"})
+
+        def on_decision(record: dict[str, Any]) -> None:
+            emit(
+                {
+                    "type": "decision",
+                    "decision": {k: v for k, v in record.items() if k != "bar"},
+                }
+            )
+
+        def one(d: Data) -> Simulation:
+            return Simulation(
+                d,
+                config,
+                allocation,
+                benchmark,
+                decide=decider.decide,
+                on_decision=on_decision,
+                cancelled=cancelled,
+                script=script,
+            ).run()
+
+        with ThreadPoolExecutor(max_workers=min(4, len(data))) as pool:
+            ai_sims = list(pool.map(one, data))
+    emit({"type": "stage", "stage": "summary", "message": "Sonuçlar hesaplanıyor"})
+    return summarize(config, data, benchmark, signal_sims, ai_sims, model)
+
+
+def config_from(body: dict[str, Any]) -> BlindConfig:
+    """Build a config from request fields (dates as ISO text)."""
+    start = _parse_date(body.get("start"))
+    end = _parse_date(body.get("end")) or today()
+    if start is None:
+        raise ValueError("Test başlangıç tarihi gerekli.")
+    costs = body.get("costs") or BistCosts()
+    return BlindConfig(
+        symbols=list(body.get("symbols") or []),
+        start=start,
+        end=end,
+        script=body.get("script"),
+        source=body.get("source"),
+        inputs=dict(body.get("inputs") or {}),
+        mode=body.get("mode") or "ai",
+        review_every=int(body.get("review_every") or 0),
+        years=float(body.get("years") or 2),
+        interval=body.get("interval") or "1d",
+        cash=float(body.get("cash") or 100_000),
+        costs=costs,
+        slippage=float(body.get("slippage", 0.001)),
+        stop_loss_pct=body.get("stop_loss_pct") or None,
+    )
+
+
+def decide_now(
+    symbols: list[str],
+    script: Script,
+    decider: Decider,
+    *,
+    inputs: dict[str, Any] | None = None,
+    holdings: dict[str, dict[str, Any]] | None = None,
+    years: float = 2.0,
+    interval: str = "1d",
+) -> list[dict[str, Any]]:
+    """Ask for a decision on each symbol's latest bar, for paper trading.
+
+    ``holdings`` maps a symbol to ``{"qty", "avg_cost", "since"}`` from the
+    paper account; a held symbol gets "SAT/TUT", the others "AL/BEKLE".
+    """
+    codes = research._codes(symbols)
+    end = today()
+    start = end - timedelta(days=round(years * 365.25))
+    frames, benchmark = research.load_study_frames(codes, start, end, interval)
+    holdings = holdings or {}
+
+    def one(code: str) -> dict[str, Any]:
+        frame, shown = frames[code]
+        index = pd.DatetimeIndex(frame.index)
+        first = int(np.searchsorted(index, shown)) if shown is not None else 0
+        result = script.run(frame, inputs, symbol=code, interval=interval)
+        if result.entries is None:
+            raise ValueError("Seçilen script bir strateji değil.")
+        stats = research.signal_stats(research.indicators(frame), first)
+        n = len(frame)
+        held = holdings.get(code)
+        close = float(frame["Close"].iloc[-1])
+        if held and _edges(result.exits, n)[-1]:
+            event = "exit"
+        elif not held and _edges(result.entries, n)[-1]:
+            event = "entry"
+        else:
+            event = "review"
+        position = None
+        if held:
+            since = held.get("since")
+            later = frame.iloc[-1:]
+            if since is not None:
+                day = pd.Timestamp(since).date()
+                mask = np.array([t.date() >= day for t in index])
+                later = frame[mask] if mask.any() else later
+            position = position_view(
+                float(held["avg_cost"]),
+                close,
+                len(later),
+                float(later["High"].max()),
+            )
+        view = snapshot(
+            frame,
+            benchmark=benchmark,
+            script=script_view(result, close, EVENTS[event]),
+            position=position,
+            training={s["key"]: s for s in stats},
+        )
+        decision = decider.decide(view)
+        return {
+            "symbol": code,
+            "time": stamp(frame.index[-1]),
+            "close": number(close),
+            "event": EVENTS[event],
+            "held": int(held["qty"]) if held else 0,
+            "signals": [item["aciklama"] for item in view["aktif_sinyaller"]],
+            **decision.to_dict(),
+        }
+
+    with ThreadPoolExecutor(max_workers=min(4, len(codes))) as pool:
+        return list(pool.map(one, codes))

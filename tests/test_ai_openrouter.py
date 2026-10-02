@@ -306,6 +306,7 @@ def test_list_models(fake_send):
             "prompt_price": 3.0,
             "completion_price": 15.0,
             "tools": True,
+            "json": False,
         },
         {
             "id": "openrouter/auto",
@@ -314,6 +315,7 @@ def test_list_models(fake_send):
             "prompt_price": None,
             "completion_price": None,
             "tools": False,
+            "json": False,
         },
         {
             "id": "z-ai/glm",
@@ -322,6 +324,7 @@ def test_list_models(fake_send):
             "prompt_price": 0.0,
             "completion_price": 0.0,
             "tools": False,
+            "json": False,
         },
     ]
     (call,) = fake_send.calls

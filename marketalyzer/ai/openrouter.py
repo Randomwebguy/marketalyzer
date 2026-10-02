@@ -192,13 +192,15 @@ def _per_million(price: Any) -> float | None:
 def _model(item: dict[str, Any]) -> dict[str, Any]:
     pricing = item.get("pricing") or {}
     context = item.get("context_length")
+    supported = item.get("supported_parameters") or []
     return {
         "id": item["id"],
         "name": item.get("name") or item["id"],
         "context_length": context if isinstance(context, int) else None,
         "prompt_price": _per_million(pricing.get("prompt")),
         "completion_price": _per_million(pricing.get("completion")),
-        "tools": "tools" in (item.get("supported_parameters") or []),
+        "tools": "tools" in supported,
+        "json": "response_format" in supported or "structured_outputs" in supported,
     }
 
 
@@ -208,8 +210,9 @@ def list_models(
     """Return OpenRouter's models, sorted by id; cached for an hour.
 
     Each model is ``{"id", "name", "context_length", "prompt_price",
-    "completion_price", "tools"}``: prices are USD per million tokens (None when
-    unknown) and ``tools`` tells whether the model supports tool calling.
+    "completion_price", "tools", "json"}``: prices are USD per million tokens
+    (None when unknown), ``tools`` tells whether the model supports tool calling
+    and ``json`` whether it can be asked for a JSON object.
     """
     global _models_cache  # noqa: PLW0603
     with _models_lock:
@@ -262,6 +265,77 @@ def pick_default_model(models: Iterable[dict[str, Any]]) -> str | None:
     return capable[0] if capable else None
 
 
+def _usage(usage: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+        "completion_tokens": int(usage.get("completion_tokens") or 0),
+        "cost": float(usage.get("cost") or 0.0),
+    }
+
+
+def complete_chat(
+    api_key: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    *,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    extra: dict[str, Any] | None = None,
+    timeout: float | tuple[float, float] = TIMEOUT,
+) -> dict[str, Any]:
+    """Run one chat completion without streaming, for short answers.
+
+    ``extra`` adds request fields such as ``response_format``, ``provider`` or
+    ``reasoning``. Returns ``{"text", "model", "finish_reason", "usage"}``.
+
+    Raises
+    ------
+    OpenRouterError
+        On HTTP and network errors and on errors reported in the body.
+    """
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "usage": {"include": True},
+    }
+    if temperature is not None:
+        payload["temperature"] = temperature
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    payload.update(extra or {})
+    response = _send(
+        "POST",
+        f"{BASE_URL}/chat/completions",
+        headers=_headers(api_key),
+        json=payload,
+        timeout=timeout,
+    )
+    _check(response)
+    try:
+        body = response.json()
+    except ValueError:
+        raise OpenRouterError("OpenRouter beklenmeyen bir yanıt döndürdü.") from None
+    finally:
+        response.close()
+    if not isinstance(body, dict):
+        raise OpenRouterError("OpenRouter beklenmeyen bir yanıt döndürdü.")
+    if body.get("error"):
+        raise _stream_error(body["error"])
+    choice = (body.get("choices") or [{}])[0] or {}
+    message = choice.get("message") or {}
+    content = message.get("content") or ""
+    if isinstance(content, list):  # Content parts: keep the text ones.
+        content = "".join(
+            part.get("text", "") for part in content if isinstance(part, dict)
+        )
+    return {
+        "text": str(content),
+        "model": body.get("model") or model,
+        "finish_reason": choice.get("finish_reason"),
+        "usage": _usage(body.get("usage") or {}),
+    }
+
+
 def _stream_error(error: Any) -> OpenRouterError:
     """Build the error for an ``error`` object inside a stream chunk."""
     code, message = _error_detail({"error": error})
@@ -299,12 +373,7 @@ def _chunk_events(chunk: dict[str, Any]) -> Iterator[dict[str, Any]]:
             yield {"type": "finish", "reason": choice["finish_reason"]}
     usage = chunk.get("usage")
     if usage:
-        yield {
-            "type": "usage",
-            "prompt_tokens": int(usage.get("prompt_tokens") or 0),
-            "completion_tokens": int(usage.get("completion_tokens") or 0),
-            "cost": float(usage.get("cost") or 0.0),
-        }
+        yield {"type": "usage", **_usage(usage)}
 
 
 def _sse_data(lines: Iterable[str | bytes]) -> Iterator[str]:
