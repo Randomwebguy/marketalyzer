@@ -259,11 +259,20 @@ Masaüstünde pencere çerçeveli, kenar çubuklu bir uygulama; telefonda alt se
 ```sh
 marketalyzer-web                 # http://127.0.0.1:8000/?token=... adresini yazdırır
 marketalyzer-web --demo          # internetsiz deneme: sentetik fiyatlar, ayrı "demo" hesabı
-OPENROUTER_API_KEY=sk-or-... scripts/tunnel.sh   # anahtarla başlatıp Cloudflare tüneliyle yayınlar
-scripts/tunnel.sh --demo         # ek argümanlar marketalyzer-web'e geçer (burada demo modu)
+marketalyzer-web --new-token     # erişim anahtarını yeniler (eski adres ve oturumlar geçersiz olur)
+scripts/tunnel.sh --hostname bist.alanadiniz.com   # sabit adresle Cloudflare tüneli (aşağıya bakın)
+scripts/tunnel.sh --quick --demo # her seferinde değişen geçici adres; ek argümanlar marketalyzer-web'e geçer
 ```
 
-Uygulama bir erişim anahtarıyla açılır. Adresteki `?token=...` bir kez kullanıldığında ya da giriş sayfasına anahtar yazıldığında tarayıcı onu 30 gün hatırlar; **Çıkış** bağlantısı çerezi siler. Sabit bir anahtar için `MARKETALYZER_TOKEN` ortam değişkeni kullanılabilir.
+Uygulama bir erişim anahtarıyla açılır. Anahtar ilk açılışta üretilir ve `~/.local/share/marketalyzer/web/token` dosyasında (izin 600) saklanır; sonraki açılışlarda aynısı kullanılır, böylece adres, tarayıcı oturumu ve telefona kurulan uygulama yeniden başlatmalarda bozulmaz. Adresteki `?token=...` bir kez kullanıldığında ya da giriş sayfasına anahtar yazıldığında tarayıcı onu 30 gün hatırlar; **Çıkış** bağlantısı çerezi siler. Anahtar sızarsa `marketalyzer-web --new-token` ile yenileyin. `MARKETALYZER_TOKEN` ortam değişkeni verilirse dosyanın yerine o kullanılır.
+
+**Sabit tünel adresi.** Hızlı tünel (`--quick`, alan adı yokken varsayılan) her başlatmada yeni bir `https://<rastgele>.trycloudflare.com` adresi verir. Her zaman aynı adres için ücretsiz bir Cloudflare hesabı ve Cloudflare'e bağlı bir alan adı gerekir (alan adının ad sunucuları Cloudflare olmalı; Cloudflare Registrar'dan da alınabilir):
+
+1. Bir kez giriş yapın: `cloudflared tunnel login` (tarayıcıda alan adınızı seçin).
+2. İlk çalıştırmada adresi verin: `scripts/tunnel.sh --hostname bist.alanadiniz.com` (Windows: `scripts\tunnel.ps1 -Hostname bist.alanadiniz.com`). Betik `marketalyzer` adlı tüneli ve DNS kaydını oluşturur, adresi `~/.local/share/marketalyzer/tunnel.*` dosyasında hatırlar.
+3. Sonraki çalıştırmalarda argüman gerekmez: `scripts/tunnel.sh` ya da `scripts\tunnel.ps1`. Kayıtlı adresi unutturmak için `--forget` / `-Forget`, farklı tünel adı için `--name` / `-TunnelName`.
+
+Tüneli Cloudflare panelinden (Zero Trust → Networks → Tunnels, genel ad → `http://localhost:8000`) oluşturduysanız panelin verdiği anahtarı `CLOUDFLARE_TUNNEL_TOKEN` ortam değişkenine koyun; betik `cloudflared tunnel run --token` ile bağlanır (`--hostname` verilirse tam adresi yazdırır).
 
 **Uygulama olarak kurma (PWA):** tünel adresi HTTPS olduğu için uygulama telefona ve masaüstüne kurulabilir.
 - iPhone: Safari'de Paylaş → Ana Ekrana Ekle. Ana ekrandan ilk açılışta erişim anahtarını bir kez girin; ana ekran uygulamaları Safari'nin çerezlerini paylaşmaz.
@@ -276,10 +285,12 @@ Uygulama bir erişim anahtarıyla açılır. Adresteki `?token=...` bir kez kull
 uv sync
 .venv\Scripts\Activate.ps1
 $env:OPENROUTER_API_KEY = "sk-or-..."      # isteğe bağlı; Ayarlar'dan da girilebilir
-powershell -ExecutionPolicy Bypass -File scripts\tunnel.ps1          # ya da sonuna --demo
+cloudflared tunnel login                   # sabit adres için bir kez
+powershell -ExecutionPolicy Bypass -File scripts\tunnel.ps1 -Hostname bist.alanadiniz.com
+powershell -ExecutionPolicy Bypass -File scripts\tunnel.ps1          # sonraki seferler; -Quick: geçici adres
 ```
 
-`scripts/tunnel.sh` için [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) kurulu olmalıdır. Betik geçici bir `https://<rastgele>.trycloudflare.com` adresi açar ve anahtarla birlikte tam adresi yazdırır. Adresi bilen herkes uygulamaya erişebileceği için paylaşmayın. Tünel, betik çalıştığı sürece açık kalır.
+Betikler için [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) kurulu olmalıdır. Bağlantı kurulunca anahtarla birlikte tam adres yazdırılır. Adresi bilen herkes uygulamaya erişebileceği için paylaşmayın. Tünel, betik çalıştığı sürece açık kalır.
 
 Arayüzün yönettiği paper hesap `web` adını taşır (demo modunda `demo`). Komut satırından `marketalyzer-paper --account web status` ile de görülebilir. Uygulama ikonları `scripts/make_icons.py` ile yeniden üretilebilir. Yazı tipleri (Geist, Geist Mono, Doto) SIL Open Font License ile `web/static/fonts/` altında birlikte gelir, böylece uygulama çevrimdışı da aynı görünür.
 

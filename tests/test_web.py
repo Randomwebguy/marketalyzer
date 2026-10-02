@@ -282,3 +282,46 @@ class TestDemo:
             ][0]["meta"]["instrumentType"]
             == "INDEX"
         )
+
+
+class TestAccessToken:
+    @pytest.fixture(autouse=True)
+    def no_env_token(self, monkeypatch):
+        monkeypatch.delenv("MARKETALYZER_TOKEN", raising=False)
+
+    def test_token_is_kept_between_runs(self):
+        from marketalyzer.web.cli import access_token, token_path
+
+        first = access_token()
+        assert len(first) >= 16
+        assert access_token() == first
+        assert token_path().read_text().strip() == first
+
+    def test_new_token_replaces_the_stored_one(self):
+        from marketalyzer.web.cli import access_token
+
+        first = access_token()
+        second = access_token(rotate=True)
+        assert second != first
+        assert access_token() == second
+
+    def test_environment_wins(self, monkeypatch):
+        from marketalyzer.web.cli import access_token, token_path
+
+        monkeypatch.setenv("MARKETALYZER_TOKEN", "  from-env-token-123  ")
+        assert access_token() == "from-env-token-123"
+        assert not token_path().exists()
+
+    def test_short_or_broken_file_gets_a_new_token(self):
+        from marketalyzer.web.cli import access_token, token_path
+
+        token_path().parent.mkdir(parents=True)
+        token_path().write_text("short")
+        token = access_token()
+        assert token != "short" and len(token) >= 16
+
+    def test_print_token(self, capsys):
+        from marketalyzer.web.cli import access_token, main
+
+        assert main(["--print-token"]) == 0
+        assert capsys.readouterr().out.strip() == access_token()
