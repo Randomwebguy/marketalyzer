@@ -14,7 +14,8 @@ if [[ -z "${MARKETALYZER_TOKEN:-}" ]]; then
 fi
 export MARKETALYZER_TOKEN
 
-marketalyzer-web --port "$PORT" &
+# Extra arguments go to marketalyzer-web, e.g. scripts/tunnel.sh --demo
+marketalyzer-web --port "$PORT" "$@" &
 WEB_PID=$!
 trap 'kill "$WEB_PID" 2>/dev/null' EXIT
 

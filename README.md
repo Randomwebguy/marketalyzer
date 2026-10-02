@@ -233,6 +233,7 @@ Masaüstünde pencere çerçeveli, kenar çubuklu bir uygulama; telefonda alt se
 marketalyzer-web                 # http://127.0.0.1:8000/?token=... adresini yazdırır
 marketalyzer-web --demo          # internetsiz deneme: sentetik fiyatlar, ayrı "demo" hesabı
 OPENROUTER_API_KEY=sk-or-... scripts/tunnel.sh   # anahtarla başlatıp Cloudflare tüneliyle yayınlar
+scripts/tunnel.sh --demo         # ek argümanlar marketalyzer-web'e geçer (burada demo modu)
 ```
 
 Uygulama bir erişim anahtarıyla açılır. Adresteki `?token=...` bir kez kullanıldığında ya da giriş sayfasına anahtar yazıldığında tarayıcı onu 30 gün hatırlar; **Çıkış** bağlantısı çerezi siler. Sabit bir anahtar için `MARKETALYZER_TOKEN` ortam değişkeni kullanılabilir.
