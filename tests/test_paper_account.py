@@ -282,3 +282,35 @@ class TestLifecycle:
         account.record_equity(OPEN)
         account.record_equity(OPEN + timedelta(minutes=5))
         assert [row["equity"] for row in account.equity_curve()] == [100_000, 100_000]
+
+
+class TestDividends:
+    def test_paid_to_shares_held_before_the_ex_date(self, make_account):
+        account = make_account()
+        account.submit("THYAO", "buy", 100, now=OPEN)
+        account.process_bar("THYAO", bar(0, 300, 300, 300, 300))
+        cash = account.cash
+        # Bought on the ex-date: this order's shares get no dividend.
+        account.submit("THYAO", "buy", 50, now=OPEN + timedelta(days=1))
+        ex_date = bar(0, 297, 298, 296, 297, day=OPEN + timedelta(days=1))
+        ex_date = Bar(**{**ex_date.__dict__, "dividend": 3.0})
+        account.process_bar("THYAO", ex_date)
+        paid = 100 * 3.0 * (1 - 0.15)
+        assert account.cash == pytest.approx(cash + paid - 50 * 297)
+        assert account.dividend_income() == pytest.approx(paid)
+        assert account.summary()["dividends"] == pytest.approx(paid, abs=0.01)
+
+    def test_no_position_no_dividend(self, make_account):
+        account = make_account()
+        account.process_bar(
+            "THYAO", Bar(OPEN, OPEN + timedelta(hours=8), 1, 1, 1, 1, 0, 5.0)
+        )
+        assert account.dividend_income() == 0
+        assert account.cash == 100_000
+
+    def test_tax_rate_is_a_setting(self, tmp_path):
+        PaperAccount.create(tmp_path / "a.sqlite", dividend_tax=0.1).close()
+        with PaperAccount(tmp_path / "a.sqlite") as account:
+            assert account.dividend_tax == 0.1
+        with pytest.raises(ValueError):
+            PaperAccount.create(tmp_path / "b.sqlite", dividend_tax=1.0)

@@ -12,6 +12,7 @@ from marketalyzer.paper import feed as feed_module
 from marketalyzer.paper.feed import (
     FrameFeed,
     ProviderFeed,
+    bar_bounds,
     completed_bars,
     completed_daily,
     last_complete_day,
@@ -100,7 +101,7 @@ class TestProviderFeed:
             calls.append((symbol, interval, start, end))
             return intraday()
 
-        monkeypatch.setattr(feed_module, "_fetch_intraday", fake)
+        monkeypatch.setattr(feed_module, "_fetch_bars", fake)
         feed = ProviderFeed("5m", timedelta(minutes=15))
         now = datetime(2026, 10, 1, 10, 40, tzinfo=IST)
         assert len(feed.bars("THYAO", None, now)) == 5
@@ -136,9 +137,53 @@ class TestProviderFeed:
         feed.daily("THYAO", morning.replace(hour=18, minute=30))
         assert calls[-1] == ("THYAO", date(2026, 10, 1))
 
-    def test_rejects_daily_interval(self):
+    def test_rejects_unknown_intervals(self):
         with pytest.raises(ValueError):
-            ProviderFeed("1d")
+            ProviderFeed("1W")
+
+    def test_daily_bars_carry_dividends(self, monkeypatch):
+        calls = []
+
+        def fake(symbol, start, end, interval, adjustment, **kwargs):
+            calls.append((interval, adjustment, kwargs))
+            frame = daily([300.0, 310.0], end="2026-10-01")
+            frame["Dividend"] = [0.0, 2.5]
+            return frame
+
+        monkeypatch.setattr(feed_module, "load_ohlcv", fake)
+        now = datetime(2026, 10, 1, 18, 30, tzinfo=IST)
+        first, second = ProviderFeed("1d").bars("THYAO", None, now)
+        assert calls == [
+            ("1d", "splits_only", {"cache": False, "include_actions": True})
+        ]
+        assert second.dividend == 2.5
+        assert second.start == datetime(2026, 10, 1, 10, 0, tzinfo=IST)
+        assert second.end == datetime(2026, 10, 1, 18, 10, tzinfo=IST)
+
+
+def test_bar_bounds():
+    stamp = pd.Timestamp("2026-10-01")
+    assert bar_bounds(stamp, "1d") == (
+        datetime(2026, 10, 1, 10, 0, tzinfo=IST),
+        datetime(2026, 10, 1, 18, 10, tzinfo=IST),
+    )
+    start, end = bar_bounds(pd.Timestamp("2026-10-01 10:05"), "5m")
+    assert (start.hour, start.minute, end.minute) == (10, 5, 10)
+
+
+def test_daily_frame_feed_clock_and_signal_window():
+    frames = {"THYAO": daily([1.0, 2.0, 3.0])}
+    feed = FrameFeed(frames, {"THYAO": daily(range(1, 11))}, "1d", signal_bars=4)
+    times = feed.times(include_closes=True)
+    assert [t.strftime("%m-%d %H:%M") for t in times] == [
+        "09-29 18:10",
+        "09-30 18:10",
+        "10-01 18:10",
+    ]
+    assert len(feed.times(start=times[1], end=times[1])) == 1
+    signals = feed.daily("THYAO", datetime(2026, 10, 1, 12, 0, tzinfo=IST))
+    assert len(signals) == 4
+    assert signals.index[-1] == pd.Timestamp("2026-09-30")
 
 
 class TestWantsLong:

@@ -33,7 +33,8 @@ def _date_index(values: Any) -> pd.DatetimeIndex:
 def to_frame(rows: list[Any]) -> pd.DataFrame:
     """Convert provider rows into an OHLCV frame with backtesting.py's columns.
 
-    Intraday timestamps become naive Istanbul wall-clock times.
+    Intraday timestamps become naive Istanbul wall-clock times. A ``dividend``
+    field, present when actions were requested, becomes a ``Dividend`` column.
     """
     records = [row.model_dump() if hasattr(row, "model_dump") else row for row in rows]
     frame = pd.DataFrame.from_records(records)
@@ -43,8 +44,13 @@ def to_frame(rows: list[Any]) -> pd.DataFrame:
     if index.dt.tz is not None:
         index = index.dt.tz_convert(IST).dt.tz_localize(None)
     frame = frame.set_index(_date_index(index))
-    frame = frame[list(COLUMNS)].rename(columns=COLUMNS)
+    columns = dict(COLUMNS)
+    if "dividend" in frame:
+        columns["dividend"] = "Dividend"
+    frame = frame[list(columns)].rename(columns=columns)
     frame["Volume"] = frame["Volume"].fillna(0)
+    if "Dividend" in frame:
+        frame["Dividend"] = frame["Dividend"].fillna(0)
     frame = frame.dropna().astype(float).sort_index()
     return frame[~frame.index.duplicated(keep="last")]
 
@@ -107,13 +113,23 @@ def load_ohlcv(
     adjustment: str = "splits_and_dividends",
     cache: bool = True,
     cache_dir: Path | None = None,
+    include_actions: bool = False,
 ) -> pd.DataFrame:
     """Load OHLCV bars for a BIST stock or index (THYAO, XU100, ...).
 
     Prices are adjusted for splits, bonus issues and, by default, dividends, so a
-    backtest sees total returns. Closed date ranges are cached on disk.
+    backtest sees total returns. With ``adjustment="splits_only"`` and
+    ``include_actions``, the cash dividend per share is added as a ``Dividend``
+    column instead, for simulations that pay dividends out. Closed date ranges
+    are cached on disk.
     """
-    params = {"symbol": symbol.upper(), "interval": interval, "adjustment": adjustment}
+    params: dict[str, Any] = {
+        "symbol": symbol.upper(),
+        "interval": interval,
+        "adjustment": adjustment,
+    }
+    if include_actions:
+        params["include_actions"] = True
     return _load("equity", params, _as_date(start), _as_date(end), cache, cache_dir)
 
 

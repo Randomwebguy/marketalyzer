@@ -9,14 +9,15 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-from marketalyzer.backtest.cli import parse_pair, parse_value
+from marketalyzer.backtest.cli import grid_values, parse_pair, parse_value
 from marketalyzer.backtest.costs import BistCosts
 from marketalyzer.backtest.data import load_ohlcv
 from marketalyzer.backtest.strategies import STRATEGIES
-from marketalyzer.paper.account import PaperAccount, normalize_symbol
+from marketalyzer.paper.account import DIVIDEND_TAX, PaperAccount, normalize_symbol
 from marketalyzer.paper.feed import INTERVALS, FrameFeed, ProviderFeed
 from marketalyzer.paper.models import Order
 from marketalyzer.paper.trader import PaperTrader, StepReport, replay
+from marketalyzer.walkforward import Window, walk_forward
 
 SIDES = {"buy": "AL", "sell": "SAT"}
 STATUSES = {
@@ -134,6 +135,12 @@ def _add_account_options(parser: argparse.ArgumentParser) -> None:
         default=0.001,
         help="Gidiş-dönüş makas ve kayma; her işlemde yarısı uygulanır",
     )
+    parser.add_argument(
+        "--dividend-tax",
+        type=float,
+        default=DIVIDEND_TAX,
+        help="Temettü stopajı oranı (güncel oranı kontrol edin)",
+    )
 
 
 def _add_strategy_options(parser: argparse.ArgumentParser, required: bool) -> None:
@@ -200,6 +207,34 @@ def build_parser() -> argparse.ArgumentParser:
     rerun.add_argument("--save", metavar="AD", help="Replay hesabını bu adla sakla")
     rerun.add_argument("--verbose", action="store_true", help="Her adımı yazdır")
     _add_account_options(rerun)
+
+    walk = commands.add_parser(
+        "walkforward",
+        help="Geçmişte optimize et, sonraki dönemi paper trade et; pencereyi kaydır",
+    )
+    walk.add_argument("symbol", metavar="SEMBOL")
+    walk.add_argument(
+        "-s", "--strategy", choices=sorted(STRATEGIES), default="sma_cross"
+    )
+    walk.add_argument("--start", required=True, help="YYYY-AA-GG (eğitim başlangıcı)")
+    walk.add_argument("--end", help="YYYY-AA-GG (varsayılan: bugün)")
+    walk.add_argument(
+        "--train", type=int, default=504, help="Eğitim penceresi [işlem günü]"
+    )
+    walk.add_argument(
+        "--test", type=int, default=126, help="Test penceresi [işlem günü]"
+    )
+    walk.add_argument(
+        "--grid",
+        type=parse_pair,
+        action="append",
+        default=[],
+        metavar="AD=ARALIK",
+        help="Arama aralığı, ör. fast=5:30:5 (varsayılan: stratejinin aralığı)",
+    )
+    walk.add_argument("--maximize", default="Sharpe Ratio")
+    walk.add_argument("--save", metavar="AD", help="Paper hesabını bu adla sakla")
+    _add_account_options(walk)
     return parser
 
 
@@ -216,17 +251,27 @@ def _replay(args: argparse.Namespace) -> dict[str, Any]:
     start = date.fromisoformat(args.start)
     end = date.fromisoformat(args.end) if args.end else date.today()
     symbols = [normalize_symbol(s) for s in args.symbols]
-    intraday = {
-        s: load_ohlcv(s, start, end, args.interval, "splits_only") for s in symbols
+    daily_bars = args.interval == "1d"
+    frames = {
+        s: load_ohlcv(
+            s, start, end, args.interval, "splits_only", include_actions=daily_bars
+        )
+        for s in symbols
     }
-    daily = {s: load_ohlcv(s, start - timedelta(days=400), end) for s in symbols}
-    feed = FrameFeed(intraday, daily, args.interval)
+    # Strategies see dividend-adjusted daily bars, with history for warm-up.
+    daily = {s: load_ohlcv(s, start - timedelta(days=600), end) for s in symbols}
+    feed = FrameFeed(frames, daily, args.interval)
 
     with tempfile.TemporaryDirectory() as tmp:
         path = account_path(args.save) if args.save else Path(tmp) / "replay.sqlite"
-        first = min(frame.index[0] for frame in intraday.values()).to_pydatetime()
+        first = min(frame.index[0] for frame in frames.values()).to_pydatetime()
         with PaperAccount.create(
-            path, args.cash, _costs(args), args.slippage, now=first
+            path,
+            args.cash,
+            _costs(args),
+            args.slippage,
+            now=first,
+            dividend_tax=args.dividend_tax,
         ) as account:
             params = {name: parse_value(value) for name, value in args.param}
             reports = replay(
@@ -237,10 +282,12 @@ def _replay(args: argparse.Namespace) -> dict[str, Any]:
                 params,
                 on_step=(lambda r: _print_step(r, args.json)) if args.verbose else None,
             )
-            hold = [
-                (frame["Close"].iloc[-1] / frame["Open"].iloc[0] - 1) * 100
-                for frame in intraday.values()
-            ]
+            hold = []
+            for symbol, frame in frames.items():
+                period = daily[symbol].loc[frame.index[0].normalize() : frame.index[-1]]
+                hold.append(
+                    (period["Close"].iloc[-1] / period["Open"].iloc[0] - 1) * 100
+                )
             return {
                 "account": str(path) if args.save else None,
                 "steps": len(reports),
@@ -257,7 +304,9 @@ def _emit(args: argparse.Namespace, data: Any, text: str) -> None:
 
 def _init(args: argparse.Namespace) -> None:
     path = args.db or account_path(args.account)
-    with PaperAccount.create(path, args.cash, _costs(args), args.slippage) as account:
+    with PaperAccount.create(
+        path, args.cash, _costs(args), args.slippage, dividend_tax=args.dividend_tax
+    ) as account:
         text = f"Sanal hesap açıldı: {path} ({_money(args.cash)} TL)"
         _emit(args, account.summary(), text)
 
@@ -271,10 +320,60 @@ def _replay_command(args: argparse.Namespace) -> None:
         f"  {'Getiri [%]':<22} {result['return_pct']:.2f}",
         f"  {'Al ve tut getirisi [%]':<22} {result['buy_hold_return_pct']:.2f}",
         f"  {'Toplam maliyet':<22} {_money(costs)} TL",
+        f"  {'Net temettü':<22} {_money(result['dividends'])} TL",
     ]
     if result["account"]:
         lines.append(f"  Hesap kaydedildi: {result['account']}")
     _emit(args, result, "\n".join(lines))
+
+
+def _window_line(window: Window) -> str:
+    params = ", ".join(f"{k}={v}" for k, v in window.params.items())
+    return (
+        f"  {window.test_start} → {window.test_end}  {params:<20}"
+        f" ileri {window.forward_return_pct:>7.2f}%"
+        f"  al-tut {window.buy_hold_return_pct:>7.2f}%"
+        f"  {window.trades:>3} işlem"
+    )
+
+
+def _walkforward_command(args: argparse.Namespace) -> None:
+    grid = {name: grid_values(spec) for name, spec in args.grid} or None
+    path = account_path(args.save) if args.save else None
+    on_window = None if args.json else (lambda w: print(_window_line(w), flush=True))
+    if on_window:
+        print("Pencere (test dönemi)       parametreler          sonuç")
+    report = walk_forward(
+        args.symbol,
+        args.strategy,
+        start=args.start,
+        end=args.end,
+        train_bars=args.train,
+        test_bars=args.test,
+        param_grid=grid,
+        maximize=args.maximize,
+        cash=args.cash,
+        costs=_costs(args),
+        slippage=args.slippage,
+        dividend_tax=args.dividend_tax,
+        account_path=path,
+        on_window=on_window,
+    )
+    summary = report.summary()
+    lines = [
+        "",
+        f"İleriye dönük sonuç ({summary['start']} → {summary['end']}):",
+        f"  {'Son özsermaye':<24} {_money(summary['equity'])} TL",
+        f"  {'Getiri [%]':<24} {summary['return_pct']:.2f}",
+        f"  {'Al ve tut getirisi [%]':<24} {summary['buy_hold_return_pct']:.2f}",
+        f"  {'En büyük düşüş [%]':<24} {summary['max_drawdown_pct']:.2f}",
+        f"  {'İşlem sayısı':<24} {summary['trades']}",
+        f"  {'Toplam komisyon':<24} {_money(summary['commissions'])} TL",
+        f"  {'Net temettü':<24} {_money(summary['dividends'])} TL",
+    ]
+    if summary["account"]:
+        lines.append(f"  Hesap kaydedildi: {summary['account']}")
+    _emit(args, summary, "\n".join(lines))
 
 
 def _status(args: argparse.Namespace, account: PaperAccount) -> None:
@@ -346,6 +445,8 @@ def main(argv: list[str] | None = None) -> int:
             _init(args)
         elif args.command == "replay":
             _replay_command(args)
+        elif args.command == "walkforward":
+            _walkforward_command(args)
         else:
             with _open(args) as account:
                 ACCOUNT_COMMANDS[args.command](args, account)

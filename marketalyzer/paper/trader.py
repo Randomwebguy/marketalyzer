@@ -115,6 +115,11 @@ class PaperTrader:
                     report.orders.append(order)
         return report
 
+    def use_params(self, params: dict[str, Any]) -> None:
+        """Switch strategy parameters, e.g. at a walk-forward window boundary."""
+        self.params = dict(params)
+        self._signals.clear()
+
     def run(
         self,
         poll: float = 60,
@@ -176,16 +181,29 @@ def replay(
     params: dict[str, Any] | None = None,
     weights: dict[str, float] | None = None,
     on_step: Callable[[StepReport], None] | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
 ) -> list[StepReport]:
     """Run the paper trader over historical bars as if they arrived live.
 
     The clock steps through every bar end and every session close, so signals
     decided at a close are filled at the next session's first bar, as in live
-    trading.
+    trading. ``start`` and ``end`` limit the replay to part of the feed.
     """
     trader = PaperTrader(account, symbols, feed, strategy, params, weights)
+    return replay_with(trader, feed, on_step, start, end)
+
+
+def replay_with(
+    trader: PaperTrader,
+    feed: FrameFeed,
+    on_step: Callable[[StepReport], None] | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> list[StepReport]:
+    """Step an existing trader through a feed's clock between ``start`` and ``end``."""
     reports = []
-    for moment in feed.times(include_closes=True):
+    for moment in feed.times(include_closes=True, start=start, end=end):
         report = trader.step(moment)
         reports.append(report)
         if on_step:

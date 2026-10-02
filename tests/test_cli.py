@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from marketalyzer.backtest.cli import _grid_values, main
+from marketalyzer.backtest.cli import grid_values, main
 
 RANGE = ["--start", "2024-01-02", "--end", "2025-02-21"]
 OFFLINE = ["--no-benchmark", "--no-usd"]
@@ -15,15 +15,15 @@ def thyao(fake_fetch, prices, as_rows):
 
 
 def test_grid_values():
-    assert _grid_values("5:20:5") == [5, 10, 15, 20]
-    assert _grid_values("10,20") == [10, 20]
-    assert _grid_values("0.1:0.3:0.1") == pytest.approx([0.1, 0.2, 0.3])
+    assert grid_values("5:20:5") == [5, 10, 15, 20]
+    assert grid_values("10,20") == [10, 20]
+    assert grid_values("0.1:0.3:0.1") == pytest.approx([0.1, 0.2, 0.3])
 
 
 @pytest.mark.parametrize("spec", ["5:20", "5:20:0", "a:b:c"])
 def test_grid_values_rejects_bad_ranges(spec):
     with pytest.raises(Exception, match="START:STOP:STEP|STEP must be positive"):
-        _grid_values(spec)
+        grid_values(spec)
 
 
 def test_cli_json(thyao, capsys):

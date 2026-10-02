@@ -56,7 +56,7 @@ def parse_pair(text: str) -> tuple[str, str]:
     return name.strip(), value.strip()
 
 
-def _grid_values(spec: str) -> list:
+def grid_values(spec: str) -> list:
     """Parse "5:30:5" (inclusive range) or "10,20,30" into a list of values."""
     if ":" in spec:
         parts = [parse_value(part) for part in spec.split(":")]
@@ -191,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
     }
     try:
         if args.optimize:
-            grid = {name: _grid_values(spec) for name, spec in args.grid} or None
+            grid = {name: grid_values(spec) for name, spec in args.grid} or None
             result = optimize_backtest(
                 args.symbol,
                 args.strategy,

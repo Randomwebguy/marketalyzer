@@ -20,9 +20,14 @@ from marketalyzer.paper.models import (
 )
 from openbb_bist.utils.symbols import to_bist_symbol, to_yahoo_symbol
 
-# End of the BIST equity closing session. A day order entered before this time
-# belongs to that day's session; one entered later waits for the next session.
+# Start of BIST continuous trading and end of the closing session. A day order
+# entered before the close belongs to that day's session; one entered later waits
+# for the next session.
+SESSION_OPEN = time(10, 0)
 SESSION_CLOSE = time(18, 10)
+# Withholding tax on cash dividends paid to resident individuals. Check the
+# current rate before relying on it.
+DIVIDEND_TAX = 0.15
 
 SCHEMA = """
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -67,6 +72,18 @@ CREATE TABLE marks (
     time TEXT NOT NULL
 );
 CREATE TABLE equity (time TEXT PRIMARY KEY, cash REAL NOT NULL, equity REAL NOT NULL);
+"""
+# Tables added after the first release; created on open for older account files.
+LATER_SCHEMA = """
+CREATE TABLE IF NOT EXISTS dividends (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    time TEXT NOT NULL,
+    qty INTEGER NOT NULL,
+    per_share REAL NOT NULL,
+    gross REAL NOT NULL,
+    tax REAL NOT NULL
+);
 """
 
 
@@ -166,6 +183,8 @@ class PaperAccount:
         self.slippage = float(settings["slippage"])
         self.initial_cash = float(settings["initial_cash"])
         self.created_at = datetime.fromisoformat(settings["created_at"])
+        self.dividend_tax = float(settings.get("dividend_tax", DIVIDEND_TAX))
+        self._db.executescript(LATER_SCHEMA)
 
     @classmethod
     def create(
@@ -175,11 +194,13 @@ class PaperAccount:
         costs: BistCosts | None = None,
         slippage: float = 0.001,
         now: datetime | None = None,
+        dividend_tax: float = DIVIDEND_TAX,
     ) -> "PaperAccount":
         """Create a new account file and open it.
 
         ``slippage`` is the round-trip spread and slippage; half of it is charged
-        on each market or stop fill.
+        on each market or stop fill. ``dividend_tax`` is withheld from cash
+        dividends.
         """
         path = Path(path)
         if path.exists():
@@ -188,6 +209,8 @@ class PaperAccount:
             raise ValueError("Starting cash must be positive.")
         if not 0 <= slippage < 0.1:
             raise ValueError("Slippage must be between 0 and 0.1.")
+        if not 0 <= dividend_tax < 1:
+            raise ValueError("Dividend tax must be between 0 and 1.")
         path.parent.mkdir(parents=True, exist_ok=True)
         created = as_istanbul(now or datetime.now(IST))
         db = sqlite3.connect(path)
@@ -202,6 +225,7 @@ class PaperAccount:
                     ("costs", json.dumps(asdict(costs or BistCosts()))),
                     ("slippage", str(float(slippage))),
                     ("created_at", created.isoformat()),
+                    ("dividend_tax", str(float(dividend_tax))),
                 ],
             )
             db.commit()
@@ -340,6 +364,11 @@ class PaperAccount:
                 reserved += self._buy_cost(order.qty, reference, order.type)
         return self.cash - reserved
 
+    def dividend_income(self) -> float:
+        """Total dividends received after withholding tax."""
+        row = self._db.execute("SELECT COALESCE(SUM(gross - tax), 0) FROM dividends")
+        return float(row.fetchone()[0])
+
     def equity_curve(self) -> list[dict[str, Any]]:
         """Return the recorded equity snapshots, oldest first."""
         return [
@@ -358,6 +387,7 @@ class PaperAccount:
             "initial_cash": self.initial_cash,
             "return_pct": round((equity / self.initial_cash - 1) * 100, 4),
             "realized_pnl": round(sum(p.realized_pnl for p in positions), 2),
+            "dividends": round(self.dividend_income(), 2),
             "unrealized_pnl": round(
                 sum(p.unrealized_pnl or 0.0 for p in open_positions), 2
             ),
@@ -460,8 +490,10 @@ class PaperAccount:
     def process_bar(self, symbol: str, bar: Bar) -> list[Fill]:
         """Match open orders against a completed bar and mark the symbol's price.
 
-        Bars that end at or before the last processed bar are ignored, so feeding
-        the same bar twice is harmless.
+        A dividend on the bar is paid first, to the shares held before the bar
+        opened: shares bought on the ex-date do not receive it. Bars that end at
+        or before the last processed bar are ignored, so feeding the same bar
+        twice is harmless.
         """
         symbol = normalize_symbol(symbol)
         start, end = as_istanbul(bar.start), as_istanbul(bar.end)
@@ -470,6 +502,8 @@ class PaperAccount:
             done = self.processed_until(symbol)
             if done is not None and end <= done:
                 return []
+            if bar.dividend > 0:
+                self._pay_dividend(symbol, bar.dividend, start)
             for order in self._open_orders(symbol):
                 if order.submitted_at > start:
                     continue
@@ -528,6 +562,19 @@ class PaperAccount:
         if type != "limit":
             price *= 1 + self.slippage / 2
         return qty * price + self.costs(qty, price)
+
+    def _pay_dividend(self, symbol: str, per_share: float, when: datetime) -> None:
+        held = self.held(symbol)
+        if not held:
+            return
+        gross = held * per_share
+        tax = gross * self.dividend_tax
+        self._db.execute(
+            "INSERT INTO dividends (symbol, time, qty, per_share, gross, tax)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (symbol, when.isoformat(), held, per_share, gross, tax),
+        )
+        self._set_cash(self.cash + gross - tax)
 
     def _close_order(self, order_id: int, status: str, reason: str) -> None:
         self._db.execute(

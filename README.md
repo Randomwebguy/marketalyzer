@@ -128,6 +128,12 @@ marketalyzer-paper run THYAO -s sma_cross --once
 
 # Geçmiş günleri canlıymış gibi oynat (5 dakikalık barlarda son 60 gün)
 marketalyzer-paper replay THYAO -s sma_cross --start 2026-09-01
+
+# Günlük barlarla yıllarca geriye oynat; temettüler stopaj düşülerek nakit ödenir
+marketalyzer-paper replay THYAO GARAN -s sma_cross --interval 1d --start 2020-01-01
+
+# Günlük barlarla gün sonu çalıştırma: her akşam kapanıştan sonra bir kez
+marketalyzer-paper run THYAO -s sma_cross --interval 1d --once
 ```
 
 Her komut `--json` ile makinece okunabilir çıktı verir. Birden fazla hesap için `--account AD` kullanılır.
@@ -150,11 +156,22 @@ Her komut `--json` ile makinece okunabilir çıktı verir. Birden fazla hesap i�
   - Nakde dönmek istediğinde tüm pozisyonu satar. `run`, verilen sembollerdeki pozisyonların tamamını yönetir; elle açılmış pozisyonlar da buna dahildir.
 - **Eşzamanlı kullanım:** `run` çalışırken başka bir terminalden veya bir yapay zeka ajanından aynı hesaba güvenle emir verilebilir.
 
+### Yürüyen pencere testi (walk-forward)
+
+Geçmişten ileriye dönük en dürüst ölçüm. Her pencerede parametreler önceki `--train` işlem gününde backtest ile optimize edilir. Sonraki `--test` gün, bu parametrelerle aynı sanal hesapta günlük barlarla paper trade edilir. Ardından pencere `--test` gün kaydırılır. Sonuçta yalnızca bu ileri dönemler sayılır; her dönem, parametrelerin seçildiği sırada görülmemiş veridir.
+
+```sh
+marketalyzer-paper walkforward THYAO -s sma_cross --start 2018-01-01 --train 504 --test 126
+```
+
+Çıktıda her pencerenin seçilen parametreleri, ileri dönem getirisi ve aynı dönemdeki al ve tut getirisi yer alır. Sonunda toplam getiri, en büyük düşüş, işlem sayısı, komisyon ve net temettü raporlanır. Parametreler eğitimde iyi görünüp ileri dönemlerde sürekli al ve tutun gerisinde kalıyorsa, strateji geçmişe uydurulmuştur.
+
 ### Kısıtlar
 
 - Kısmi gerçekleşme yoktur. Emir, hacimden bağımsız olarak tamamen dolar; az işlem gören hisselerde sonuç iyimser olur.
 - Taban ve tavan fiyat limitleri, açılış ve kapanış seansı eşleşmeleri ve emir defteri derinliği modellenmez.
-- Temettüler sanal hesaba nakit olarak yansımaz ve bölünmeler pozisyon adedini değiştirmez. Bu olayları kapsayan dönemlerde sonucu elle düzeltin.
+- Temettüler yalnızca günlük barlarla (`--interval 1d`) nakit olarak ödenir; varsayılan stopaj oranı %15'tir (`--dividend-tax`, güncel oranı kontrol edin). Dakikalık barlarda temettü yansımaz.
+- Bölünme ve bedelsiz sermaye artırımlarında replay, bölünmeye göre düzeltilmiş fiyatlarla çalıştığı için sonuç tutarlıdır. Canlı çalışan bir hesapta ise bölünme günü pozisyon adedi değişmez; bunu elle düzeltmek gerekir.
 
 ## Geliştirme
 
@@ -170,5 +187,5 @@ Testler ağa çıkmaz. Fiyatlar sentetik veridir.
 
 1. **Veri katmanı:** `openbb-bist` sağlayıcısı. ✅
 2. **Backtest motoru:** BIST maliyetleri, fiyat adımları, optimizasyon ve test dönemi ayrımı, USD bazında getiri. ✅
-3. **Paper trading:** SQLite tabanlı sanal hesap, bar tabanlı emir eşleştirme, strateji döngüsü ve replay. ✅ Sonraki adımlar: temettü ve bölünme olaylarının hesaba yansıması, kısmi gerçekleşme ve taban/tavan limitleri. Gerçek zamanlıya yakın test için lisanslı bir veri kaynağı gerekir.
+3. **Paper trading:** SQLite tabanlı sanal hesap, bar tabanlı emir eşleştirme, strateji döngüsü, günlük ve dakikalık replay, temettü ödemeleri ve walk-forward testi. ✅ Sonraki adımlar: kısmi gerçekleşme, taban/tavan limitleri ve çok sembollü walk-forward. Gerçek zamanlıya yakın test için lisanslı bir veri kaynağı gerekir.
 4. **Yapay zeka katmanı:** `marketalyzer-backtest --json`, `marketalyzer-paper --json` ve OpenBB'nin MCP sunucusu (`openbb-mcp`) üzerinden çalışan, stratejileri yalnızca backtest ve paper trading ortamında öneren, deneyen ve değerlendiren bir ajan.

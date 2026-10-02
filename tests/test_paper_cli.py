@@ -111,7 +111,7 @@ def test_run_once_processes_live_bars(account, capsys, monkeypatch):
         hour=0, minute=0, second=0, microsecond=0
     ) - timedelta(days=1)
     frame = bars(yesterday + timedelta(hours=10), 6)
-    monkeypatch.setattr(feed_module, "_fetch_intraday", lambda *args: frame)
+    monkeypatch.setattr(feed_module, "_fetch_bars", lambda *args: frame)
     # Placed before yesterday's session, so yesterday's bars can fill it.
     with PaperAccount(account) as paper:
         paper.submit("THYAO", "buy", 10, now=yesterday + timedelta(hours=9))
@@ -131,7 +131,7 @@ def test_run_once_with_a_strategy(account, capsys, monkeypatch):
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     monkeypatch.setattr(
         feed_module,
-        "_fetch_intraday",
+        "_fetch_bars",
         lambda *args: bars(today - timedelta(days=1) + timedelta(hours=10), 3),
     )
     daily = v_shaped_daily(today - timedelta(days=1))
@@ -202,3 +202,71 @@ def test_replay(capsys, monkeypatch):
     )
     assert code == 0
     assert "Al ve tut getirisi" in out
+
+
+def test_daily_replay_pays_dividends(capsys, monkeypatch):
+    calls = []
+
+    def fake_load(symbol, start, end, interval="1d", adjustment=None, **kwargs):
+        calls.append((interval, adjustment, kwargs.get("include_actions", False)))
+        frame = v_shaped_daily("2026-09-30")
+        if adjustment == "splits_only":
+            frame = frame.loc["2026-09-01":].copy()
+            frame["Dividend"] = 0.0
+            frame.loc["2026-09-29", "Dividend"] = 1.5
+        return frame
+
+    monkeypatch.setattr(cli_module, "load_ohlcv", fake_load)
+    result = run_json(
+        capsys,
+        "replay",
+        "THYAO",
+        "-s",
+        "sma_cross",
+        "-p",
+        "fast=5",
+        "-p",
+        "slow=20",
+        "--interval",
+        "1d",
+        "--start",
+        "2026-09-01",
+        "--end",
+        "2026-09-30",
+        "--dividend-tax",
+        "0.1",
+    )
+    assert ("1d", "splits_only", True) in calls
+    assert result["fills"][0]["side"] == "buy"
+    held = result["fills"][0]["qty"]
+    assert result["dividends"] == pytest.approx(held * 1.5 * 0.9, abs=0.01)
+
+
+def test_walkforward_command(capsys, monkeypatch):
+    def fake_load(symbol, start, end, interval="1d", adjustment=None, **kwargs):
+        return v_shaped_daily("2026-09-30", periods=120)
+
+    monkeypatch.setattr("marketalyzer.walkforward.load_ohlcv", fake_load)
+    args = [
+        "walkforward",
+        "THYAO",
+        "-s",
+        "sma_cross",
+        "--start",
+        "2026-01-01",
+        "--train",
+        "60",
+        "--test",
+        "30",
+        "--grid",
+        "fast=5,10",
+        "--grid",
+        "slow=20,30",
+    ]
+    result = run_json(capsys, *args)
+    assert len(result["windows"]) == 2
+    assert {w["params"]["fast"] for w in result["windows"]} <= {5, 10}
+    code, out, err = run(capsys, *args)
+    assert code == 0, err
+    assert "İleriye dönük sonuç" in out
+    assert "ileri" in out

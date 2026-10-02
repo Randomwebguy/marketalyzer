@@ -29,7 +29,10 @@ def _plain(record: Any) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class Bar:
-    """One completed price bar. ``start`` and ``end`` are Istanbul times."""
+    """One completed price bar. ``start`` and ``end`` are Istanbul times.
+
+    ``dividend`` is the cash dividend per share going ex on this bar, if any.
+    """
 
     start: datetime
     end: datetime
@@ -38,6 +41,7 @@ class Bar:
     low: float
     close: float
     volume: float = 0.0
+    dividend: float = 0.0
 
 
 @dataclass
