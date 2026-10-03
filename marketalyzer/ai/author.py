@@ -66,10 +66,12 @@ def system_prompt() -> str:
 # Trend following beat dip buying on BIST large caps in both 2024-2026 test
 # years; holding trends needs few exits, so the frequency target is modest.
 DEFAULT_GOAL = (
-    "Trend takibi: yükselen trendde pozisyonda kal, trend bozulunca çık; trend dönüşünü"
-    " erken yakalayan hassas bir trend göstergesi (ör. Supertrend, hızlı/yavaş ortalama)"
-    " kullan. Her hissede çeyrekte en az 2 işlem olsun, ama her işlem maliyeti"
-    " karşılamalı; trendi gereksiz çıkışlarla parçalama."
+    "Trend takibi: yükselen trendde pozisyonda kal, trend dönünce çık. Girişi ve çıkışı"
+    " hassas bir trend göstergesinin yön değişimine bağla (ör. çarpanı 2 olan Supertrend"
+    " ya da hızlı/yavaş ortalama kesişimi). Araştırmadaki 5-20 barlık sinyaller kısa"
+    " vadelidir: onları yalnızca girişi süzmek için kullan. Zaman aşımı, RSI aşırı alım"
+    " ya da Bollinger bandı gibi erken çıkışlar kullanma; trend sürerken pozisyonu"
+    " kapatma. Her hissede çeyrekte en az 2 işlem olsun."
 )
 
 
