@@ -39,7 +39,7 @@ MAX_LESSON = 300
 # The most recent outcomes the coach reads.
 REFLECT_ITEMS = 40
 REFLECT_TIMEOUT = (10.0, 90.0)
-REFLECT_TOKENS = 1500
+REFLECT_TOKENS = 3000
 
 REFLECT_SYSTEM = """Sen Borsa İstanbul kör testinde strateji sinyallerini onaylayan ya da
 reddeden hızlı bir karar modelinin koçusun. Sana stratejinin özeti ve test öncesi
@@ -54,6 +54,7 @@ Görevin, modelin sonuçlarından en fazla 5 kısa ve uygulanabilir ders çıkar
   1,5 katıyken giriş sinyalini uygula").
 - Az örneğe dayanan genellemelerden kaçın; mevcut dersleri sonuçlar destekliyorsa
   koru, çürütüyorsa değiştir.
+- Her ders tek cümle ve en fazla 40 kelime olsun; açıklama ya da örnek listesi yazma.
 - Hisse adı ya da tarih yazma.
 Yalnızca JSON yaz: {"dersler": ["...", "..."]}"""
 
@@ -296,9 +297,16 @@ class Journal:
 # --- Lessons ------------------------------------------------------------------------
 
 
+_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
 def parse_lessons(text: str) -> list[str]:
-    """Read the lessons from ``{"dersler": [...]}`` or from a bulleted list."""
-    match = re.search(r"\{.*\}", text or "", re.S)
+    """Read the lessons from ``{"dersler": [...]}`` or from a bulleted list.
+
+    A reply cut off by the token limit keeps the lessons it finished.
+    """
+    text = text or ""
+    match = re.search(r"\{.*\}", text, re.S)
     if match:
         try:
             data = json.loads(match.group(0))
@@ -306,10 +314,11 @@ def parse_lessons(text: str) -> list[str]:
             data = None
         if isinstance(data, dict) and isinstance(data.get("dersler"), list):
             return [str(item) for item in data["dersler"]]
+    start = re.search(r'"dersler"\s*:\s*\[', text)
+    if start:
+        return [json.loads(item) for item in _STRING.findall(text[start.end() :])]
     bullet = re.compile(r"^\s*(?:[-•*]|\d+[.)])\s+(.*\S)")
-    return [
-        m.group(1) for line in (text or "").splitlines() if (m := bullet.match(line))
-    ]
+    return [m.group(1) for line in text.splitlines() if (m := bullet.match(line))]
 
 
 def clean_lessons(items: list[str], codes: list[str]) -> list[str]:

@@ -244,6 +244,9 @@ def test_lessons_drop_tickers_dates_and_extras():
     assert len(lessons[1]) <= learn.MAX_LESSON + 1
     assert lessons[2:] == ["a", "b", "c"]
     assert learn.parse_lessons('{"dersler": ["bir", "iki"]}') == ["bir", "iki"]
+    # A reply cut off by the token limit keeps its finished lessons.
+    cut = '{"dersler": ["RSI\'ı izle, \\"three_down\\" iyi", "ADX 20 üstü", "yarım ka'
+    assert learn.parse_lessons(cut) == ['RSI\'ı izle, "three_down" iyi', "ADX 20 üstü"]
     assert learn.parse_lessons("Dersler:\n- bir\n• iki\n3. üç") == ["bir", "iki", "üç"]
 
 
