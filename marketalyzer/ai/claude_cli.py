@@ -85,6 +85,9 @@ def complete(
     if system:
         args += ["--system-prompt", system]
     env = {k: v for k, v in os.environ.items() if k not in DROPPED}
+    # Claude Code thinks by default: a one-line decision then takes ~20 s and
+    # ~1,500 tokens instead of ~3 s and ~75, and the API runs did not think.
+    env["MAX_THINKING_TOKENS"] = "0"
     try:
         done = subprocess.run(  # noqa: S603 - fixed program, no shell
             args,

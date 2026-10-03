@@ -53,6 +53,7 @@ def test_a_request_runs_claude_print_without_the_users_key(monkeypatch):
     assert "--no-session-persistence" in args and "--strict-mcp-config" in args
     assert kwargs["input"] == '{"görünüm": "ğüşıöç"}' and kwargs["encoding"] == "utf-8"
     assert not {"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"} & set(kwargs["env"])
+    assert kwargs["env"]["MAX_THINKING_TOKENS"] == "0"
     assert answer["text"].startswith('{"karar"')
     assert answer["model"] == "claude-haiku-4-5"
     assert answer["usage"]["cost"] == 0.0 and answer["usage"]["prompt_tokens"] == 1000
