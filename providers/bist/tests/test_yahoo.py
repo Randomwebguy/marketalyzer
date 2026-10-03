@@ -112,6 +112,23 @@ class TestChartRecords:
         assert records[0]["date"] == datetime(2026, 10, 2, 10, 0, tzinfo=IST)
         assert records[0]["date"].utcoffset() == timedelta(hours=3)
 
+    def test_intraday_prices_around_a_split_are_kept(self):
+        # Yahoo already adjusts intraday bars for a split inside the requested
+        # range (and reports it as an event); adjusting again would halve them.
+        rows = [
+            (ts(2026, 5, 13, 16, 30), 203.0, 204.0, 202.0, 203.0, 2000),
+            (ts(2026, 5, 14, 9, 30), 209.0, 210.0, 208.0, 209.0, 3000),
+        ]
+        split = {
+            "date": ts(2026, 5, 14, 9, 30),
+            "numerator": 200.0,
+            "denominator": 100.0,
+        }
+        result = self.result(rows, events={"splits": {"x": split}})
+        records = yahoo.chart_records(result, "1h")
+        assert [row["close"] for row in records] == [203.0, 209.0]
+        assert [row["volume"] for row in records] == [2000, 3000]
+
     def test_dividend_adjustment_scales_every_price(self):
         rows = THYAO_DAILY[:2]
         result = self.result(rows, adjclose=[288.8, 302.5])
@@ -209,6 +226,19 @@ class TestFetchHistory:
         data = asyncio.run(yahoo.fetch_history(["THYAO.IS"], "1m", start, today))
         assert len(fake_chart.calls) == 4
         assert len(data) == 3
+
+    @pytest.mark.parametrize("interval", ["1h", "1d"])
+    def test_bars_after_the_end_date_are_dropped(self, fake_chart, interval):
+        # Yahoo appends the latest bar even when period2 is long past.
+        today = datetime.now(IST).date()
+        day = today - timedelta(days=10)
+        rows = [
+            (ts(day.year, day.month, day.day, 10), 1.0, 1.0, 1.0, 1.0, 1),
+            (ts(today.year, today.month, today.day, 10), 2.0, 2.0, 2.0, 2.0, 1),
+        ]
+        fake_chart.responses["THYAO.IS"] = make_chart("THYAO.IS", rows)
+        data = asyncio.run(yahoo.fetch_history(["THYAO.IS"], interval, day, day))
+        assert [row["close"] for row in data] == [1.0]
 
     def test_intraday_actions_are_dropped(self, fake_chart):
         today = datetime.now(IST).date()

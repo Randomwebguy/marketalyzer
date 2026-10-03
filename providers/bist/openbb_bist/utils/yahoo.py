@@ -223,6 +223,11 @@ def _event_date(timestamp: int) -> date:
     return datetime.fromtimestamp(timestamp, IST).date()
 
 
+def _day(value: date | datetime) -> date:
+    """Return the Istanbul trading date of a daily key or an intraday time."""
+    return value.date() if isinstance(value, datetime) else value
+
+
 def chart_records(
     result: dict[str, Any],
     interval: str,
@@ -329,6 +334,8 @@ async def fetch_history(
                     raise
                 continue
             records.extend(chart_records(result, interval, adjustment, include_actions))
+        # Yahoo appends the latest bar even when period2 is long past.
+        records = [row for row in records if _day(row["date"]) <= end]
         if not records:
             raise EmptyDataError(
                 f"{label(symbol)}: no price data in the requested range."
