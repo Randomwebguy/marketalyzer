@@ -214,7 +214,7 @@ class BlindRequest(Costs):
     script: str | None = None
     source: str | None = Field(None, max_length=50_000)
     inputs: dict[str, float | str | bool] = Field(default_factory=dict)
-    mode: Literal["ai", "signals"] = "ai"
+    mode: Literal["ai", "signals", "stats"] = "ai"
     review_every: Literal[0, 5, 10, 20] = 0
     years: float = Field(2, ge=0.5, le=10)
     interval: Literal["1d", "1W", "1h"] = "1d"
@@ -1027,7 +1027,7 @@ def create_app(
                 coach=coach,
                 revise=revise,
             )
-            if config.mode == "ai":
+            if config.mode != "signals":
                 result["run_id"] = runs.save(result)
             return result
 

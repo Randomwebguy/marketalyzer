@@ -10,6 +10,11 @@ return for a buy, the signal's trade without the AI for a rejected entry
 (what was missed or avoided) and the move over the next bars for a sell or a
 hold. An outcome is shown only to decisions made on or after the bar where
 it became known, with letters instead of tickers and no dates.
+
+With the strategy's past signals at hand (``evidence.Pool`` for entries and
+for exits), the coach writes rules over the signal readings instead of free
+lessons, and a rule is kept only if the past signals it picks did what it
+claims.
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from marketalyzer.ai import evidence
 from marketalyzer.ai.openrouter import OpenRouterError, complete_chat, stream_chat
 from marketalyzer.services import number
 
@@ -43,6 +49,10 @@ def horizon(interval: str) -> int:
 RECENT = 6
 # Lessons are rewritten once this many new outcomes are known.
 REFLECT_EVERY = 6
+# Rules rest on many past signals, so they are rewritten less often.
+RULES_EVERY = 12
+# Rules that failed the check, kept to show the coach what did not hold.
+MAX_REJECTED = 12
 MAX_LESSONS = 5
 MAX_LESSON = 300
 # The most recent outcomes the coach reads.
@@ -66,6 +76,27 @@ Görevin, modelin sonuçlarından en fazla 5 kısa ve uygulanabilir ders çıkar
 - Her ders tek cümle ve en fazla 40 kelime olsun; açıklama ya da örnek listesi yazma.
 - Hisse adı ya da tarih yazma.
 Yalnızca JSON yaz: {"dersler": ["...", "..."]}"""
+
+RULES_SYSTEM = """Sen Borsa İstanbul kör testinde strateji sinyallerini onaylayan ya da
+reddeden hızlı bir karar modelinin koçusun. Sana stratejinin özeti, geçmiş giriş
+sinyallerinin sonucu ("tum_gecmis_sinyaller", maliyet dahil işlem getirisi), geçmiş
+çıkış sinyallerinden sonra birkaç bar daha tutmanın sonucu ("tum_gecmis_cikislar"),
+her ölçümün üçte birlik dilimlerindeki sonuçlar ("olcum_dilimleri",
+"cikis_olcum_dilimleri"), mevcut kurallar, geçmişte tutmayan kurallar ve modelin
+sonucu belli olmuş son kararları (o andaki ölçümleriyle) verilir; hisseler harfle
+anılır, tarih yoktur.
+
+Görevin en fazla 5 kural önermek. Giriş kuralının eylemi "reddet" ya da "uygula",
+çıkış kuralınınki "tut" (çıkış sinyaline rağmen pozisyonu koru) ya da "sat"tır.
+- Her kural 1-3 koşuldan oluşur; yalnızca "olcumler" içindeki adları ve <, <=, >, >=
+  işlemlerini kullan. Eşikleri dilimlerdeki aralıklardan seç.
+- Her kural kendi türündeki geçmiş tüm sinyallerde sınanır: en az 10 sinyal
+  seçmeyen ya da seçtiği sinyallerin ortalaması iddiasını (reddet/sat: negatif ve
+  genelden belirgin kötü; uygula/tut: pozitif ve genelden belirgin iyi)
+  tutturmayan kural atılır. Bu yüzden az koşullu, çok sinyale dayanan kurallar
+  yaz; tutmayan kuralları tekrarlama.
+- Mevcut kurallar hâlâ geçerliyse koru.
+Yalnızca JSON yaz: {"kurallar": [{"kosullar": [["rsi", "<", 45]], "eylem": "reddet"}]}"""
 
 
 @dataclass
@@ -230,6 +261,9 @@ class Journal:
         self.letters = letters
         self.entries: list[Entry] = []
         self.lessons: list[str] = []
+        # Verified rules with their record; their texts are also the lessons.
+        self.rules: list[tuple[evidence.Rule, dict[str, Any]]] = []
+        self.rejected: list[dict[str, Any]] = []
         self.history: list[dict[str, Any]] = []
         self.cost = 0.0  # what writing the lessons cost, in USD
         self.reflections = 0  # coach calls
@@ -298,9 +332,19 @@ class Journal:
             "ozet": summary,
             "son_sonuclar": [e.line() for e in recent],
         }
-        if self.lessons:
+        if self.rules:
+            view["kurallar"] = [evidence.describe(row) for _, row in self.rules]
+        elif self.lessons:
             view["dersler"] = list(self.lessons)
         return view
+
+    def matching(self, values: dict[str, Any], exit: bool = False) -> list[str]:
+        """Return the verified entry (or exit) rules that hold for the readings."""
+        return [
+            evidence.describe(row)
+            for rule, row in self.rules
+            if rule.exit == exit and rule.matches(values)
+        ]
 
 
 # --- Lessons ------------------------------------------------------------------------
@@ -405,3 +449,77 @@ def reflect(
     if not lessons:
         journal.unusable += 1
     return lessons or None
+
+
+def reflect_rules(
+    journal: Journal,
+    now: Any,
+    coach: Coach,
+    pool: evidence.Pool,
+    *,
+    exits: evidence.Pool | None = None,
+    strategy: dict[str, Any] | None,
+) -> list[str]:
+    """Have the coach propose rules, keep those the past signals bear out.
+
+    Entry rules are checked on ``pool``, exit rules on ``exits``. The current
+    rules are checked again on everything known by ``now``, so a rule that
+    stops holding is dropped. Returns the kept rules' texts (also the
+    journal's lessons); the coach failing leaves only the re-check.
+    """
+    known = pool.known(now)
+    after = exits.known(now) if exits is not None else []
+    done = sorted(journal.known(now), key=lambda e: (e.at, e.order))[-REFLECT_ITEMS:]
+    payload = {
+        "strateji": strategy or {},
+        "olcumler": evidence.FEATURES,
+        "tum_gecmis_sinyaller": evidence.stats(known),
+        "olcum_dilimleri": evidence.slices(known),
+        "tum_gecmis_cikislar": evidence.stats(after),
+        "cikis_olcum_dilimleri": evidence.slices(after),
+        "mevcut_kurallar": [row for _, row in journal.rules],
+        "tutmayan_kurallar": journal.rejected[-MAX_REJECTED:],
+        "son_kararlar": [
+            {
+                "hisse": e.letter,
+                "olay": e.event,
+                "karar": e.label,
+                "sonuc_%": e.pct,
+                "degerlendirme": e.verdict(),
+                "olcumler": e.features,
+            }
+            for e in done
+        ],
+    }
+    messages = [
+        {"role": "system", "content": RULES_SYSTEM},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+    ]
+    journal.reflections += 1
+    proposed: list[evidence.Rule] = []
+    try:
+        answer = coach.complete(
+            coach.api_key,
+            coach.model,
+            messages,
+            temperature=0.2,
+            max_tokens=REFLECT_TOKENS,
+            timeout=REFLECT_TIMEOUT,
+        )
+        journal.cost += float((answer.get("usage") or {}).get("cost") or 0.0)
+        proposed = evidence.parse_rules(answer["text"])
+    except OpenRouterError:
+        pass
+    if not proposed:
+        journal.unusable += 1
+    candidates = [rule for rule, _ in journal.rules]
+    candidates += [rule for rule in proposed if rule not in candidates]
+    kept, failed = [], []
+    for rule in candidates:
+        row = evidence.verify(rule, after if rule.exit else known)
+        (kept if row["kabul"] else failed).append((rule, row))
+    kept.sort(key=lambda item: -abs(item[1].get("t") or 0))
+    journal.rules = kept[: evidence.MAX_RULES]
+    journal.rejected = (journal.rejected + [row for _, row in failed])[-MAX_REJECTED:]
+    journal.lessons = [evidence.describe(row) for _, row in journal.rules]
+    return journal.lessons

@@ -23,8 +23,11 @@ const STAGES = {
   study: "Sinyaller inceleniyor", writing: "Model scripti yazıyor", fixing: "Model scripti düzeltiyor",
   checking: "Script doğrulanıyor", saved: "Kaydedildi", loading: "Veriler yükleniyor",
   strategy: "Strateji özetleniyor", deciding: "Model bar bar karar veriyor", revising: "Script geliştiriliyor",
-  summary: "Sonuçlar hesaplanıyor",
+  summary: "Sonuçlar hesaplanıyor", evidence: "Stratejinin geçmiş sinyalleri toplanıyor",
 };
+const MODES = [["ai", "AI + sinyaller"], ["stats", "İstatistik filtresi"], ["signals", "Sadece sinyaller"]];
+// Who decided in a result: the model or the statistics filter.
+const decider = (r) => (r.config?.mode === "stats" ? "İstatistik filtresi" : "Yapay zeka");
 // Results survive leaving the page; the module stays loaded.
 const memory = { study: null, author: null, blind: null, live: null, rotation: null, auto: null, presets: null, scripts: null };
 // Turkey's large caps, the rotation's default universe (with survivorship bias).
@@ -465,8 +468,8 @@ export function render(root) {
           <label class="field">Strateji scripti<select name="script">${scriptOptions()}</select></label>
           <div class="field">Kararı veren
             <div class="segmented block" data-mode>
-              <button type="button" data-m="ai" class="${ai ? "active" : ""}">${icon("sparkle", "sm")} AI + sinyaller</button>
-              <button type="button" data-m="signals" class="${ai ? "" : "active"}">Sadece sinyaller</button></div></div>
+              ${MODES.map(([m, label]) => `<button type="button" data-m="${m}" class="${blindForm.mode === m ? "active" : ""}">${m === "ai" ? `${icon("sparkle", "sm")} ` : ""}${label}</button>`).join("")}</div>
+            ${blindForm.mode === "stats" ? `<span class="hint">Yapay zekasız ölçüt: giriş sinyalini, stratejinin en benzer geçmiş sinyalleri maliyet sonrası ortalamada kazandırdıysa alır; çıkış sinyalinde, benzer geçmiş çıkışlardan sonra tutmak kazandırdıysa pozisyonu tutar. Ücretsizdir.</span>` : ""}</div>
         </div>
         ${ai ? `<div class="row">
           <label class="field">Karar modeli<select name="model">${modelOptions()}</select>
@@ -476,7 +479,7 @@ export function render(root) {
         </div>
         <div class="row">
           <label class="field">Öğrenme<select name="learning">${LEARNING.map(([v, l]) => `<option value="${v}" ${blindForm.learning === v ? "selected" : ""}>${l}</option>`).join("")}</select>
-            <span class="hint">Model yalnızca sonucu belli olmuş kararlarından öğrenir; her 6 sonuçta asistan modeli ders notu yazar.</span></label>
+            <span class="hint">Model yalnızca sonucu belli olmuş kararlarından öğrenir; her 12 sonuçta asistan modeli kural önerir ve yalnızca stratejinin geçmiş sinyallerinde tutan kurallar kullanılır.</span></label>
           ${blindForm.learning === "rounds" ? `<label class="field">Tur sayısı<select name="rounds">${ROUNDS.map((n) => `<option value="${n}" ${Number(blindForm.rounds) === n ? "selected" : ""}>${n} pencere</option>`).join("")}</select>
             <span class="hint">Test dönemi eşit pencerelere bölünür; script her pencere sonunda yalnızca o güne kadarki veriyle geliştirilir ve sonraki pencerede kullanılır.</span></label>` : ""}
         </div>` : ""}
@@ -503,7 +506,7 @@ export function render(root) {
   }
 
   function estimateText(e) {
-    if (e.mode !== "ai") return `${e.symbols.reduce((n, s) => n + s.entries + s.exits, 0)} sinyal olayı · yapay zeka çağrısı yok`;
+    if (e.mode !== "ai") return `${e.symbols.reduce((n, s) => n + s.entries + s.exits, 0)} sinyal olayı · yapay zeka çağrısı yok${e.mode === "stats" ? " · geçmiş sinyaller toplanırken biraz sürer" : ""}`;
     const cost = e.cost_usd == null ? "maliyet bilinmiyor" : `~$${fmtNumber(e.cost_usd, 3)}`;
     const l = e.learning;
     const extra = l ? ` · + ~${l.reflections} ders notu${l.revisions ? `, ${l.revisions} script revizyonu` : ""} (${l.coach_model ?? "asistan modeli"})` : "";
@@ -531,7 +534,7 @@ export function render(root) {
       </div>
       ${progress != null && blindAbort ? `<div class="progress"><i style="width:${progress.toFixed(1)}%"></i></div>` : ""}
       ${brief?.ozet && blindAbort ? `<p class="muted small" style="margin:6px 0">Strateji (${esc(brief.tur)}): ${esc(brief.ozet)}</p>` : ""}
-      ${b.lessons?.length && blindAbort ? `<div class="notice" style="margin:8px 0">${icon("sparkle", "sm")} <b>Ders notları</b>
+      ${b.lessons?.length && blindAbort ? `<div class="notice" style="margin:8px 0">${icon("sparkle", "sm")} <b>Sınanmış kurallar</b>
         <ul style="margin:4px 0 0 18px">${b.lessons.map((lesson) => `<li>${esc(lesson)}</li>`).join("")}</ul></div>` : ""}
       <div class="table-wrap decision-log">${tableHtml([
         { key: "time", label: "Bar", format: tipTime },
@@ -563,10 +566,33 @@ export function render(root) {
         ${record?.islem ? ` · Test öncesi ${record.islem} işlem, kazançlı %${fmtNumber(record["kazancli_%"] ?? 0, 0)}, ortalama ${signedPct(record["ort_getiri_%"])}%` : ""}</p>`);
     }
     if (l) {
-      parts.push(`<p class="muted small" style="margin:0 0 6px">${l.resolved} kararın sonucu günlüğe girdi · ${l.history.length} ders notu güncellemesi · $${fmtNumber(l.cost_usd ?? 0, 4)}</p>
-        ${l.lessons.length ? `<ol style="margin:0 0 0 18px">${l.lessons.map((lesson) => `<li>${esc(lesson)}</li>`).join("")}</ol>` : `<p class="muted small">Ders notu yazılmadı.</p>`}`);
+      const rules = Boolean(r.evidence);
+      parts.push(`<p class="muted small" style="margin:0 0 6px">${l.resolved} kararın sonucu günlüğe girdi · ${l.history.length} ${rules ? "kural" : "ders notu"} güncellemesi · $${fmtNumber(l.cost_usd ?? 0, 4)}</p>
+        ${rules ? `<p class="muted small" style="margin:0 0 6px">Koçun önerdiği her kural stratejinin geçmiş sinyallerinde sınandı; yalnızca en az 10 sinyalde iddiasını tutturanlar kullanıldı.</p>` : ""}
+        ${l.lessons.length ? `<ol style="margin:0 0 0 18px">${l.lessons.map((lesson) => `<li>${esc(lesson)}</li>`).join("")}</ol>` : `<p class="muted small">${rules ? "Sınamayı geçen kural olmadı." : "Ders notu yazılmadı."}</p>`}`);
     }
     return parts.length ? `<h3 class="sub-title">Öğrenme</h3>${parts.join("")}` : "";
+  }
+
+  function comparisonHtml(r) {
+    const c = r.comparison;
+    if (!c?.entries) return "";
+    const share = (s) => (s.count ? `${s.count} · kazançlı %${fmtNumber(s.win_pct, 0)} · ortalama ${signedPct(s.avg_pct)}%` : "0");
+    const tl = (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${fmtMoney(v, 0)}`);
+    const passed = c.pnl.passed;
+    return `<h3 class="sub-title">Karar karşılaştırması</h3>
+      <p class="muted small" style="margin:0 0 6px">Her giriş kararı, sinyallerin aynı açılışta açtığı işlemle ölçülür; seçim böylece çıkışlardan
+        ayrı değerlendirilir. Rastgele seçim: aynı sayıda sinyali gelişigüzel almak.</p>
+      <div class="summary-rows">
+        <div><span>Giriş sinyali</span><b>${c.entries}</b></div>
+        <div><span>Alınanlar</span><b>${share(c.taken)}</b></div>
+        <div><span>Reddedilenler (alınsaydı)</span><b>${share(c.passed)}</b></div>
+        <div><span>Doğru karar oranı</span><b>%${fmtNumber(c.accuracy_pct ?? 0, 0)} · hepsini reddetmek %${fmtNumber(c.pass_all_accuracy_pct ?? 0, 0)}</b></div>
+        <div><span>Rastgele seçimi geçme oranı</span><b>${c.beats_random_pct == null ? "—" : `%${fmtNumber(c.beats_random_pct, 0)}`}</b></div>
+        <div><span>Kâr/zarar</span><b>sinyaller ${tl(c.pnl.signals)} · ${esc(decider(r).toLocaleLowerCase("tr"))} ${tl(c.pnl.ai)} · rastgele seçim ${tl(c.pnl.random)} · hiç almamak 0</b></div>
+        <div><span>Reddedilenlerin toplamı</span><b>${tl(passed)}${passed ? (passed < 0 ? " (kaçınılan zarar)" : " (kaçırılan kâr)") : ""}</b></div>
+        <div><span>Çıkış sinyalleri</span><b>${c.exits.signals} · uyulan ${c.exits.followed}</b></div>
+      </div>`;
   }
 
   function roundsHtml(r) {
@@ -662,7 +688,7 @@ export function render(root) {
           <span class="muted small">${audit.decisions} karar · ${audit.rechecks} yeniden hesaplama · ${audit.mismatches} uyuşmazlık · ${audit.leaks} sızıntı</span></div>
         <ul>${audit.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul></div>` : ""}
       <div class="tiles" style="margin-top:12px">
-        ${ai ? tile("Yapay zeka getirisi", pctText(ai.return_pct), { cls: `${tone(ai.return_pct)}-text`, note: `Son ${fmtMoney(ai.equity_final, 0)}` }) : ""}
+        ${ai ? tile(`${decider(r)} getirisi`, pctText(ai.return_pct), { cls: `${tone(ai.return_pct)}-text`, note: `Son ${fmtMoney(ai.equity_final, 0)}` }) : ""}
         ${tile("Sadece sinyaller", pctText(r.signals.return_pct), { cls: ai ? "" : `${tone(r.signals.return_pct)}-text`, note: `${r.signals.trades} işlem` })}
         ${tile("Al ve tut", pctText(r.hold.return_pct))}
         ${r.benchmark ? tile("XU100", pctText(r.benchmark.return_pct)) : ""}
@@ -674,6 +700,7 @@ export function render(root) {
         ${r.initial_signals ? tile("İlk script, sinyaller", pctText(r.initial_signals.return_pct), { note: `${r.initial_signals.trades} işlem · revizyonsuz` }) : ""}
       </div>
       ${main.trades < 10 ? `<p class="notice" style="margin:12px 0 0">${icon("alert", "sm")} İşlem sayısı az; sonuç istatistiksel olarak zayıf.</p>` : ""}
+      ${comparisonHtml(r)}
       ${roundsHtml(r)}
       ${learningHtml(r)}
       <div class="card-head" style="margin-top:16px"><h3>Özsermaye</h3><span class="spacer"></span>
@@ -682,8 +709,8 @@ export function render(root) {
       <h3 class="sub-title">Hisse bazında</h3>
       <div class="table-wrap">${tableHtml([
         { key: "symbol", label: "Hisse", html: (s) => `<b>${esc(s.symbol)}</b>` },
-        ...(ai ? [{ key: "ai_return_pct", label: "Yapay zeka", num: true, html: (s) => pctCell(s.ai_return_pct) },
-          { key: "ai_trades", label: "AI işlem", num: true }] : []),
+        ...(ai ? [{ key: "ai_return_pct", label: decider(r), num: true, html: (s) => pctCell(s.ai_return_pct) },
+          { key: "ai_trades", label: `${decider(r)} işlem`, num: true }] : []),
         { key: "signals_return_pct", label: "Sinyaller", num: true, html: (s) => pctCell(s.signals_return_pct) },
         { key: "signals_trades", label: "Sinyal işlem", num: true },
         { key: "hold_return_pct", label: "Al ve tut", num: true, html: (s) => pctCell(s.hold_return_pct) },
@@ -712,7 +739,7 @@ export function render(root) {
           { key: "exit_reason", label: "Çıkış nedeni" },
         ], (ai ? r.trades : r.signal_trades).slice().reverse())}</div></details>`;
     const series = [
-      ai && { name: "Yapay zeka", color: token("--accent"), points: ai.equity },
+      ai && { name: decider(r), color: token("--accent"), points: ai.equity },
       { name: "Sadece sinyaller", color: token("--series-2"), points: r.signals.equity },
       { name: "Al ve tut", color: slotColor(2), points: r.hold.equity },
       r.benchmark && { name: "XU100", color: slotColor(3), points: r.benchmark.equity, dash: true },

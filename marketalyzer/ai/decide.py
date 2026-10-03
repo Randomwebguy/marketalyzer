@@ -151,8 +151,24 @@ Kurallar:
 - Varsayılan olarak strateji sinyalini uygula: giriş sinyalinde AL, çıkış sinyalinde
   SAT. Yalnızca stratejinin mantığıyla açıklanamayan belirgin bir ek risk görürsen
   reddet. Kârlı bir sinyali kaçırmak da zararlı bir işlem kadar hatadır.
-- "karar_gunlugu" varsa önceki kararlarının sonuçlarını ve ders notlarını içerir;
-  derslere uy, aynı hataları tekrarlama.
+- "trend", "momentum", "oynaklik", "hacim", "konum" ve "aktif_sinyaller" stratejiden
+  bağımsız genel göstergelerdir; ayarları stratejininkinden farklı olabilir (ör.
+  "supertrend_genel" çarpanı 3'tür). Stratejinin kendi durumu "strateji"
+  bölümündedir. Genel bir göstergenin strateji sinyaliyle çelişmesi tek başına ret
+  nedeni değildir.
+- "gunluk" hissenin günlük barlardaki durumunu, "piyasa" XU100'ün eğilimini ve
+  büyük hisselerin yüzde kaçının 50 günlük ortalamasının üstünde olduğunu anlatır.
+- "benzer_gecmis_sinyaller" doğrudan kanıttır ama az örneğe dayanır: "benzer" bu
+  stratejinin bu ana en çok benzeyen geçmiş sinyallerinin gerçekleşmiş sonucu,
+  "tumu" tüm geçmiş sinyallerinin sonucudur (maliyet dahil). Sinyaller genelde
+  kârlıysa reddetmek kâr kaçırır: yalnızca benzerlerin ortalaması negatifse ve
+  başka bir kanıt da bunu destekliyorsa reddet.
+- "benzer_gecmis_cikislar" çıkış sinyalinde, benzer geçmiş çıkış sinyallerinden
+  sonra pozisyonu birkaç bar daha tutmanın sonucudur ("kazancli_%": tutmanın
+  kazandırdığı oran). Tutmanın ortalaması belirgin pozitifse TUT, negatifse SAT.
+- "karar_gunlugu" varsa önceki kararlarının sonuçlarını içerir. "kurallar" geçmiş
+  sinyallerde sınanmış kurallardır; "bu_sinyale_uyan_kurallar" doluysa ona uy.
+  "dersler" önceki testlerden kalan notlardır; kanıtla çelişmedikçe uy.
 - Eğitim döneminde güçlü çalışmış sinyallere ağırlık ver, ters çalışmışlara güvenme.
 - Gidiş-dönüş işlem maliyeti yaklaşık %{ROUND_TRIP_COST_PCT}.
 - Pozisyondayken kârı koru, zararı büyütme; ama tek bir zayıf barda panikle satma.
@@ -270,6 +286,8 @@ def snapshot(
     strategy: dict[str, Any] | None = None,
     journal: dict[str, Any] | None = None,
     interval: str = "1d",
+    context: dict[str, Any] | None = None,
+    evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Describe the last bar of ``frame`` without names, dates or price levels.
 
@@ -279,8 +297,12 @@ def snapshot(
     ``training`` each catalog signal's statistics from the training period.
     ``strategy`` adds the strategy's summary and track record
     (``strateji_ozeti``, ``strateji_gecmisi``); ``journal`` the resolved
-    outcomes and lessons known at this bar (``karar_gunlugu``). Bars other
-    than daily are named in ``zaman_dilimi`` (daily views stay unchanged).
+    outcomes and rules known at this bar (``karar_gunlugu``). ``context``
+    holds the daily picture and the market known at this bar (``gunluk``,
+    ``piyasa``); ``evidence`` how the strategy's similar past signals ended
+    (``benzer_gecmis_sinyaller`` for an entry, ``benzer_gecmis_cikislar`` for
+    an exit). Bars other than daily are named in ``zaman_dilimi`` (daily
+    views stay unchanged).
     """
     ind = indicators(frame)
     c = ind["close"]
@@ -307,7 +329,7 @@ def snapshot(
             else None,
             "adx": _value(ind["adx"]),
             "di_farki": number(ind["plus_di"][-1] - ind["minus_di"][-1], 1),
-            "supertrend": "yukarı" if ind["st_dir"][-1] < 0 else "aşağı",
+            "supertrend_genel": "yukarı" if ind["st_dir"][-1] < 0 else "aşağı",
         },
         "momentum": {
             "rsi": _value(ind["rsi"]),
@@ -364,10 +386,15 @@ def snapshot(
             item["egitim"] = history
         active.append(item)
     view["aktif_sinyaller"] = active
+    for key in ("gunluk", "piyasa"):
+        if (context or {}).get(key):
+            view[key] = context[key]
     if strategy:
         view.update(strategy)
     if script:
         view["strateji"] = script
+    if evidence:
+        view.update(evidence)
     view["pozisyon"] = position or {"durum": "yok"}
     if journal:
         view["karar_gunlugu"] = journal
@@ -622,6 +649,50 @@ class Decider:
         return decision
 
 
+class EvidenceDecider:
+    """Decide without a model, from how the strategy's similar signals ended.
+
+    An entry is taken when the most similar past entry signals averaged a
+    gain after costs (``benzer_gecmis_sinyaller``), or when there is no
+    evidence yet. On an exit signal the position is kept when holding on
+    after the most similar past exit signals averaged a gain
+    (``benzer_gecmis_cikislar``); otherwise it is sold.
+    """
+
+    model = "istatistik-filtresi"
+    cache = None
+
+    def decide(self, view: dict[str, Any]) -> Decision:
+        """Decide on one snapshot from its evidence."""
+        holding = (view.get("pozisyon") or {}).get("durum") == "var"
+        event = (view.get("strateji") or {}).get("olay")
+        if holding:
+            if event != "çıkış":
+                return Decision("hold", LABELS["keep"], reason="çıkış sinyali yok",
+                                model=self.model)  # fmt: skip
+            after = (view.get("benzer_gecmis_cikislar") or {}).get("benzer") or {}
+            average = after.get("ort_getiri_%")
+            if average is not None and average > 0:
+                share = after.get("kazancli_%")
+                note = f"benzer {after.get('adet')} çıkıştan sonra ort. %{average}"
+                return Decision("hold", LABELS["keep"],
+                                round(share) if share is not None else None, note,
+                                model=self.model)  # fmt: skip
+            return Decision("sell", LABELS["sell"], reason="strateji çıkış sinyali",
+                            model=self.model)  # fmt: skip
+        similar = (view.get("benzer_gecmis_sinyaller") or {}).get("benzer") or {}
+        average = similar.get("ort_getiri_%")
+        if average is None:
+            return Decision("buy", LABELS["buy"], reason="yeterli geçmiş sinyal yok",
+                            model=self.model)  # fmt: skip
+        confidence = similar.get("kazancli_%")
+        confidence = round(confidence) if confidence is not None else None
+        note = f"benzer {similar.get('adet')} sinyal ort. %{average}"
+        if average > 0:
+            return Decision("buy", LABELS["buy"], confidence, note, model=self.model)
+        return Decision("hold", LABELS["hold"], confidence, note, model=self.model)
+
+
 def make_decider(
     api_key: str,
     choice: str | None,
@@ -658,7 +729,7 @@ SAMPLE = {
         "sma50_ustunde_sma200": True,
         "adx": 27.4,
         "di_farki": 9.8,
-        "supertrend": "yukarı",
+        "supertrend_genel": "yukarı",
     },
     "momentum": {
         "rsi": 61.2,

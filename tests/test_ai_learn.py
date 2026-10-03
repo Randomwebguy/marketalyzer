@@ -29,7 +29,7 @@ from test_ai_lab import (  # noqa: F401
 )
 
 from marketalyzer import blind, services
-from marketalyzer.ai import decide, learn, runs
+from marketalyzer.ai import decide, evidence, learn, runs
 from marketalyzer.ai.decide import Decider, DecisionCache
 from marketalyzer.ai.openrouter import OpenRouterError
 from marketalyzer.ai.settings import save_settings
@@ -284,13 +284,21 @@ def test_lessons_drop_tickers_dates_and_extras():
     assert learn.parse_lessons("Dersler:\n- bir\n• iki\n3. üç") == ["bir", "iki", "üç"]
 
 
-def test_lessons_are_written_every_six_outcomes_and_reach_the_view():
+def test_rules_are_checked_on_past_signals_and_reach_the_view(monkeypatch):
+    # The synthetic prices rise, so taking every signal "holds" once no
+    # distance from the average is asked; the other rule picks nothing.
+    monkeypatch.setattr(evidence, "MIN_T", 0.0)
     model = RuleModel()
     prompts = []
+    rules = {"kurallar": [
+        {"kosullar": [["rsi", ">=", 0]], "eylem": "uygula"},
+        {"kosullar": [["rsi", "<", 0]], "eylem": "reddet"},
+        {"kosullar": [["hisse_adi", "<", 1]], "eylem": "reddet"},
+    ]}  # fmt: skip
 
     def coach_complete(api_key, model_id, messages, **kwargs):
         prompts.append(messages)
-        return answer_text('{"dersler": ["Aşırı satımda sinyali uygula."]}')
+        return answer_text(json.dumps(rules))
 
     events = []
     # Reviews every 5 bars give enough decisions for a few reflections.
@@ -300,18 +308,34 @@ def test_lessons_are_written_every_six_outcomes_and_reach_the_view():
         coach=learn.Coach("k", "koç", complete=coach_complete),
         emit=events.append,
     )
-    assert prompts and prompts[0][0]["content"] == learn.REFLECT_SYSTEM
+    assert prompts and prompts[0][0]["content"] == learn.RULES_SYSTEM
     payload = json.loads(prompts[0][1]["content"])
-    assert len(payload["kararlar"]) >= learn.REFLECT_EVERY
+    assert payload["tum_gecmis_sinyaller"]["adet"] >= evidence.MIN_SAMPLES
+    assert set(payload["olcum_dilimleri"]) <= set(evidence.FEATURES)
     for messages in prompts:
         text = messages[1]["content"]
         assert "THYAO" not in text and "GARAN" not in text and not DATE.search(text)
+    kept = "RSI >= 0 ise uygula"
     lessons = [e for e in events if e["type"] == "lesson"]
-    assert lessons and lessons[0]["lessons"] == ["Aşırı satımda sinyali uygula."]
-    assert any("Aşırı satımda sinyali uygula." in v for v in model.views)
-    assert result["learning"]["lessons"] == ["Aşırı satımda sinyali uygula."]
-    assert result["learning"]["history"][0]["resolved"] >= learn.REFLECT_EVERY
+    assert lessons and len(lessons[0]["lessons"]) == 1
+    assert lessons[0]["lessons"][0].startswith(kept)
+    # The verified rule and the rules an entry meets reach the decisions.
+    assert any(kept in v and "bu_sinyale_uyan_kurallar" in v for v in model.views)
+    assert result["learning"]["lessons"][0].startswith(kept)
+    history = result["learning"]["history"][0]
+    assert history["resolved"] >= learn.RULES_EVERY
+    assert history["rejected"] == ["RSI < 0 ise reddet"]
     assert result["learning"]["cost_usd"] > 0
+
+
+def test_lessons_without_past_signals_are_free_text():
+    journal = learn.Journal({"THYAO": "Hisse A"})
+    coach = learn.Coach(
+        "k", "koç", complete=lambda *a, **k: answer_text('{"dersler": ["Bekle."]}')
+    )
+    assert learn.reflect(journal, None, coach, strategy=None, codes=["THYAO"]) == [
+        "Bekle."
+    ]
 
 
 def test_a_failing_coach_keeps_the_test_going():

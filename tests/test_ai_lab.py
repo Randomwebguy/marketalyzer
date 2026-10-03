@@ -105,7 +105,7 @@ class RuleModel:
         with self.lock:
             self.views.append(messages[1]["content"])
         holding = view["pozisyon"]["durum"] == "var"
-        up = view["trend"]["supertrend"] == "yukarı"
+        up = view["trend"]["supertrend_genel"] == "yukarı"
         if holding:
             return answer("TUT" if up else "SAT")
         return answer("AL" if up else "BEKLE")

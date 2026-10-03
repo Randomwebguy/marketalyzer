@@ -91,6 +91,7 @@ def list_runs(limit: int = 20) -> list[dict[str, Any]]:
                 "saved": run.get("saved"),
                 "symbols": (run.get("config") or {}).get("symbols"),
                 "scripts": scripts_of(run),
+                "mode": (run.get("config") or {}).get("mode", "ai"),
                 "period": run.get("period"),
                 "learning": (run.get("learning") or {}).get("mode", "off"),
                 "ai_return_pct": ai.get("return_pct"),

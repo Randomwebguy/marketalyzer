@@ -11,12 +11,17 @@ dates or the price level, so it cannot recall what happened next.
 Each symbol trades its own equal share of the cash, long only. The same
 signals are also traded without the AI ("signals") and held from the first
 bar ("hold"), to show what the AI added.
+
+Entry decisions also see the daily picture and the market at that bar and
+how the strategy's most similar past signals ended (``evidence``); "stats"
+mode decides from that evidence alone, without a model, as a yardstick.
 """
 
 from __future__ import annotations
 
 import json
 import math
+import random
 import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -28,15 +33,18 @@ import numpy as np
 import pandas as pd
 
 from marketalyzer import research
-from marketalyzer.ai import author, learn
+from marketalyzer.ai import author, evidence, learn
+from marketalyzer.ai.context import Context, load_context
 from marketalyzer.ai.decide import (
     Decider,
+    EvidenceDecider,
     position_view,
     script_view,
     snapshot,
 )
 from marketalyzer.ai.openrouter import OpenRouterError
 from marketalyzer.backtest.costs import BistCosts, tick_size
+from marketalyzer.rotation import LARGE_CAPS
 from marketalyzer.scripting import Script, ScriptError, compile_script
 from marketalyzer.services import (
     _parse_date,
@@ -51,12 +59,15 @@ from openbb_bist.utils.constants import INTRADAY_LOOKBACK_DAYS
 MAX_DECISIONS = 800
 REVIEW_CHOICES = (0, 5, 10, 20)
 BLIND_INTERVALS = ("1d", "1W", "1h")
-MODES = ("ai", "signals")
+MODES = ("ai", "signals", "stats")
+RANDOM_DRAWS = 2000
 # off: decide alone; journal: learn from resolved outcomes; rounds: also revise
 # the script between walk-forward windows.
 LEARNING = ("off", "journal", "rounds")
 MAX_ROUNDS = 4
 EVENTS = {"entry": "giriş", "exit": "çıkış", "review": "gözden geçirme"}
+# Where a view carries how similar past signals ended.
+EVIDENCE_KEYS = {"entry": "benzer_gecmis_sinyaller", "exit": "benzer_gecmis_cikislar"}
 END = "dönem sonu (açık)"  # a position still open when the test ends
 ROUND_END = "tur sonu"  # a position closed because its window ended
 _DATE = re.compile(r"\b(19|20)\d\d-\d\d-\d\d\b")
@@ -90,9 +101,13 @@ class BlindConfig:
     def check(self) -> None:
         """Raise ValueError (in Turkish) for settings that cannot run."""
         if self.mode not in MODES:
-            raise ValueError("Karar modu 'ai' ya da 'signals' olmalı.")
+            raise ValueError("Karar modu 'ai', 'signals' ya da 'stats' olmalı.")
         if self.learning not in LEARNING:
             raise ValueError("Öğrenme 'off', 'journal' ya da 'rounds' olmalı.")
+        if self.mode == "stats" and self.learning != "off":
+            raise ValueError(
+                "İstatistik filtresi öğrenme kullanmaz; öğrenmeyi kapatın."
+            )
         if not 1 <= self.rounds <= MAX_ROUNDS:
             raise ValueError(f"Tur sayısı 1 ile {MAX_ROUNDS} arasında olmalı.")
         if self.rounds > 1 and self.learning != "rounds":
@@ -180,6 +195,156 @@ def load(config: BlindConfig, script: Script) -> tuple[list[Data], pd.DataFrame 
     return data, benchmark
 
 
+class Evidence:
+    """A test's context and the strategy's past signals, read at decisions.
+
+    ``pool`` holds the entry samples (signal trades), ``exits`` the exit
+    samples (what holding on after an exit signal brought).
+    """
+
+    def __init__(
+        self,
+        context: Context,
+        pool: evidence.Pool,
+        benchmark: pd.DataFrame | None,
+        exits: evidence.Pool | None = None,
+    ):
+        self.context = context
+        self.pool = pool
+        self.exits = exits or evidence.Pool([])
+        self._index = None
+        if benchmark is not None and len(benchmark) > 21:
+            close = benchmark["Close"].astype(float)
+            self._index = (close.index, (close / close.shift(20) - 1).to_numpy() * 100)
+
+    def index_change(self, when: Any) -> float | None:
+        """Return XU100's 20-bar change on the last bar at or before ``when``."""
+        if self._index is None:
+            return None
+        times, changes = self._index
+        k = int(times.searchsorted(when, side="right")) - 1
+        value = changes[k] if k >= 0 else math.nan
+        return float(value) if math.isfinite(value) else None
+
+    def sections(self, code: str, when: Any, price: float) -> dict[str, Any]:
+        """Return the daily picture and the market known at ``when``."""
+        return {
+            "gunluk": self.context.daily(code, when, price),
+            "piyasa": self.context.market(when),
+        }
+
+    def readings(
+        self, code: str, ind: dict[str, np.ndarray], i: int, when: Any, sections: dict
+    ) -> dict[str, float | None]:
+        """Return the readings of bar ``i`` of ``ind`` for the pool and the rules."""
+        return evidence.readings(
+            ind,
+            i,
+            index_change=self.index_change(when),
+            daily=sections.get("gunluk"),
+            market=sections.get("piyasa"),
+        )
+
+
+def _samples(
+    code: str,
+    frame: pd.DataFrame,
+    first: int,
+    result: Any,
+    script: Script,
+    config: BlindConfig,
+    found: Evidence,
+) -> tuple[list[evidence.Sample], list[evidence.Sample]]:
+    """Trade a stock's signals from ``first`` on; return its entry and exit samples.
+
+    An entry sample is a closed trade, known when it closed. An exit sample
+    is a sale on an exit signal and the move from that sale over the next
+    ``learn.horizon`` bars, known at their end.
+    """
+    past = Data(code, frame, first, first, result, {})
+    sim = Simulation(past, config, config.cash, script=script).run()
+    ind = research.indicators(frame)
+    opens = frame["Open"].to_numpy(dtype=float)
+    close = frame["Close"].to_numpy(dtype=float)
+    horizon = learn.horizon(config.interval)
+    entries, exits = [], []
+
+    def readings(i: int) -> dict[str, float | None]:
+        when = frame.index[i]
+        return found.readings(
+            code, ind, i, when, found.sections(code, when, float(close[i]))
+        )
+
+    for trade, (entry, exit_bar) in zip(sim.trades, sim.trade_bars):
+        if trade.get("open") or entry < 1:
+            continue
+        # The signals came on the bars before the fills at the next open.
+        entries.append(
+            evidence.Sample(
+                readings(entry - 1),
+                float(trade["return_pct"] or 0.0),
+                frame.index[exit_bar],
+                code,
+            )
+        )
+        later = exit_bar + horizon
+        if trade["exit_reason"] == "sinyal" and later < len(frame) and opens[exit_bar]:
+            exits.append(
+                evidence.Sample(
+                    readings(exit_bar - 1),
+                    float((close[later] / opens[exit_bar] - 1) * 100),
+                    frame.index[later],
+                    code,
+                )
+            )
+    return entries, exits
+
+
+def gather_evidence(
+    config: BlindConfig,
+    script: Script,
+    data: list[Data],
+    benchmark: pd.DataFrame | None,
+) -> Evidence:
+    """Load the context and trade the strategy on the test stocks and the large caps.
+
+    Every closed signal trade and every exit signal from the training start
+    to the test end becomes a sample, counted for a decision only once its
+    outcome is known. A large cap that fails to load is left out.
+    """
+    train_start = config.start - timedelta(days=round(config.years * 365.25))
+    codes = [d.code for d in data]
+    context = load_context(codes, train_start, config.end, config.interval)
+    found = Evidence(context, evidence.Pool([]), benchmark)
+    parts = [
+        _samples(d.code, d.frame, d.train_first, d.result, script, config, found)
+        for d in data
+    ]
+    others = [code for code in LARGE_CAPS if code not in codes]
+
+    def one(code: str) -> tuple[list[evidence.Sample], list[evidence.Sample]]:
+        try:
+            frame, shown = research.load_bars(
+                code, train_start, config.end, config.interval, warmup=True
+            )
+        except Exception:  # A reference stock is optional.  # noqa: BLE001
+            return [], []
+        index = pd.DatetimeIndex(frame.index)
+        first = int(np.searchsorted(index, shown)) if shown is not None else 0
+        if len(frame) - first < research.MIN_BARS:
+            return [], []
+        result = script.run(frame, config.inputs, symbol=code, interval=config.interval)
+        if result.entries is None:
+            return [], []
+        return _samples(code, frame, first, result, script, config, found)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        parts += list(pool.map(one, others))
+    found.pool = evidence.Pool([s for entries, _ in parts for s in entries])
+    found.exits = evidence.Pool([s for _, exits in parts for s in exits])
+    return found
+
+
 @dataclass
 class _Account:
     cash: float
@@ -215,8 +380,14 @@ class Simulation:
         codes: list[str] | None = None,
         on_close: Callable[[Simulation, dict, dict], None] | None = None,
         round_no: int = 1,
+        found: Evidence | None = None,
+        rules: Callable[[dict[str, Any], bool], list[str]] | None = None,
     ):
         self.data = data
+        # The context and past signals for the views; the rules an entry meets.
+        self.found = found
+        self.rules = rules
+        self._readings: dict[int, dict[str, Any]] = {}
         self.config = config
         self.benchmark = benchmark
         self.decide = decide
@@ -355,6 +526,23 @@ class Simulation:
             position = position_view(
                 account.entry_price, close, i - account.entry_bar, account.peak
             )
+        context = similar = None
+        if self.found is not None:
+            when = frame.index[i]
+            context = self.found.sections(self.data.code, when, close)
+            values = self.found.readings(
+                self.data.code, research.indicators(cut), -1, when, context
+            )
+            self._readings[i] = values
+            if event in ("entry", "exit"):
+                leaving = event == "exit"
+                pool = self.found.exits if leaving else self.found.pool
+                found = pool.similar(values, when)
+                if found:
+                    similar = {EVIDENCE_KEYS[event]: found}
+                if journal and self.rules:
+                    matched = self.rules(values, leaving)
+                    journal = {**journal, "bu_sinyale_uyan_kurallar": matched}
         view = snapshot(
             cut,
             benchmark=benchmark,
@@ -364,6 +552,8 @@ class Simulation:
             strategy=self.strategy,
             journal=journal,
             interval=self.config.interval,
+            context=context,
+            evidence=similar,
         )
         return view, result
 
@@ -428,6 +618,11 @@ class Simulation:
             "round": self.round_no,
             **decision.to_dict(),
         }
+        if i in self._readings:
+            record["readings"] = self._readings.pop(i)
+        for key in EVIDENCE_KEYS.values():
+            if key in view:
+                record["evidence"] = view[key]
         self.decisions.append(record)
         if self.on_decision:
             self.on_decision(record)
@@ -510,6 +705,9 @@ class Learner:
     next open (what was missed or avoided), known when that trade closed;
     without one, and for sells and holds, it is the move from the next open
     over ``horizon`` bars, known on that bar.
+
+    With the strategy's past signal trades (``pool``) the coach writes rules
+    that are checked on them, instead of free lessons.
     """
 
     def __init__(
@@ -521,22 +719,28 @@ class Learner:
         strategy: dict[str, Any] | None = None,
         emit: Callable[[dict[str, Any]], None] = lambda event: None,
         horizon: int = learn.HORIZON,
+        pool: evidence.Pool | None = None,
+        exits: evidence.Pool | None = None,
     ):
         self.journal = journal
         self.signals = {sim.data.code: sim for sim in signal_sims}
+        self.exits = exits
         self.coach = coach
         self.strategy = strategy
         self.emit = emit
         self.horizon = horizon
+        self.pool = pool
         self._open: dict[int, learn.Entry] = {}
 
     def day(self, when: Any) -> dict[str, Any] | None:
         """Return what the decisions on ``when`` may know.
 
-        Once ``learn.REFLECT_EVERY`` new outcomes are known, the coach first
-        rewrites the lessons from them.
+        Once enough new outcomes are known (``learn.REFLECT_EVERY``, or
+        ``learn.RULES_EVERY`` for rules), the coach first rewrites the
+        lessons from them.
         """
-        if self.coach and self.journal.fresh(when) >= learn.REFLECT_EVERY:
+        every = learn.RULES_EVERY if self.pool is not None else learn.REFLECT_EVERY
+        if self.coach and self.journal.fresh(when) >= every:
             self.reflect(when)
         return self.journal.view(when)
 
@@ -544,28 +748,44 @@ class Learner:
         """Have the coach rewrite the lessons from what is known on ``when``."""
         if not self.coach or not self.journal.fresh(when):
             return
-        lessons = learn.reflect(
-            self.journal,
-            when,
-            self.coach,
-            strategy=self.strategy,
-            codes=list(self.journal.letters),
-        )
+        before = list(self.journal.lessons)
+        if self.pool is not None:
+            # The rules are checked again even when the coach fails.
+            lessons = learn.reflect_rules(
+                self.journal,
+                when,
+                self.coach,
+                self.pool,
+                exits=self.exits,
+                strategy=self.strategy,
+            )
+        else:
+            lessons = (
+                learn.reflect(
+                    self.journal,
+                    when,
+                    self.coach,
+                    strategy=self.strategy,
+                    codes=list(self.journal.letters),
+                )
+                or before
+            )
         self.journal.mark(when)
-        if lessons:
-            resolved = len(self.journal.known(when))
-            self.journal.lessons = lessons
-            self.journal.history.append(
-                {"resolved": resolved, **note, "lessons": lessons}
-            )
-            self.emit(
-                {"type": "lesson", "lessons": lessons, "resolved": resolved, **note}
-            )
+        if lessons == before:
+            return
+        self.journal.lessons = lessons
+        resolved = len(self.journal.known(when))
+        row = {"resolved": resolved, **note, "lessons": lessons}
+        if self.pool is not None:
+            row["rejected"] = [item["kural"] for item in self.journal.rejected[-5:]]
+        self.journal.history.append(row)
+        self.emit({"type": "lesson", "lessons": lessons, "resolved": resolved, **note})
 
     def add(self, sim: Simulation, i: int, view: dict, record: dict) -> None:
         """Keep a decision just made on bar ``i`` and schedule its outcome."""
         holding = (view.get("pozisyon") or {}).get("durum") == "var"
-        entry = self.journal.add(record, holding=holding, features=learn.features(view))
+        features = record.get("readings") or learn.features(view)
+        entry = self.journal.add(record, holding=holding, features=features)
         if record["action"] == "buy":
             self._open[id(record)] = entry
             return
@@ -868,6 +1088,7 @@ def summarize(
             "model": model,
         }
         result["trades"] = trades
+        result["comparison"] = compare(ai_sims, signal_sims)
         for decision in decisions:
             decision.pop("bar", None)
         result["decisions"] = decisions
@@ -887,6 +1108,78 @@ def summarize(
             ],
         }
     return result
+
+
+def _share(values: list[float]) -> dict[str, Any]:
+    if not values:
+        return {"count": 0}
+    return {
+        "count": len(values),
+        "win_pct": number(sum(v > 0 for v in values) / len(values) * 100, 1),
+        "avg_pct": number(sum(values) / len(values), 2),
+    }
+
+
+def compare(ai_sims: list[Any], signal_sims: list[Any]) -> dict[str, Any]:
+    """Set every entry decision against the signal trade it was asked about.
+
+    A taken or passed entry is judged by the trade the signals alone opened at
+    the same next open, so the choice is measured apart from the exits. The
+    choice is also set against random picks of as many signals (``random``:
+    the expected result; ``beats_random_pct``: the share of random picks it
+    beat) and against passing them all.
+    """
+    opened = {
+        (t["symbol"], t["entry_time"]): t for sim in signal_sims for t in sim.trades
+    }
+    taken, passed = [], []
+    exits = {"signals": 0, "followed": 0}
+    for sim in ai_sims:
+        index = sim.data.frame.index
+        for d in sim.decisions:
+            if d.get("error"):
+                continue
+            if d["event"] == EVENTS["exit"]:
+                exits["signals"] += 1
+                exits["followed"] += d["action"] == "sell"
+                continue
+            if d["event"] != EVENTS["entry"] or d["bar"] + 1 >= len(index):
+                continue
+            trade = opened.get((d["symbol"], stamp(index[d["bar"] + 1])))
+            if trade is not None:
+                (taken if d["action"] == "buy" else passed).append(trade)
+    pnls = [t["pnl"] or 0.0 for t in taken + passed]
+    chosen = sum(t["pnl"] or 0.0 for t in taken)
+    beats = None
+    if taken and passed:
+        draw = random.Random(0)  # noqa: S311 - a repeatable yardstick, not a secret
+        picks = [sum(draw.sample(pnls, len(taken))) for _ in range(RANDOM_DRAWS)]
+        beats = number(sum(p < chosen for p in picks) / len(picks) * 100, 1)
+    right = sum((t["pnl"] or 0) > 0 for t in taken)
+    right += sum((t["pnl"] or 0) <= 0 for t in passed)
+    total = len(taken) + len(passed)
+    return {
+        "entries": total,
+        "taken": _share([t["return_pct"] or 0.0 for t in taken]),
+        "passed": _share([t["return_pct"] or 0.0 for t in passed]),
+        "pnl": {
+            "signals": number(
+                sum(t["pnl"] or 0.0 for s in signal_sims for t in s.trades), 2
+            ),
+            "ai": number(sum(t["pnl"] or 0.0 for s in ai_sims for t in s.trades), 2),
+            "taken": number(chosen, 2),
+            "passed": number(sum(t["pnl"] or 0.0 for t in passed), 2),
+            "random": number(sum(pnls) / len(pnls) * len(taken), 2) if pnls else None,
+        },
+        "beats_random_pct": beats,
+        "accuracy_pct": number(right / total * 100, 1) if total else None,
+        "pass_all_accuracy_pct": number(
+            sum((v or 0) <= 0 for v in pnls) / total * 100, 1
+        )
+        if total
+        else None,
+        "exits": exits,
+    }
 
 
 def estimate(config: BlindConfig, data: list[Data]) -> dict[str, Any]:
@@ -1213,15 +1506,21 @@ def run_blind(
     config.check()
     if config.mode == "ai" and decider is None:
         raise ValueError("Yapay zeka modu için karar modeli gerekli.")
+    if config.mode == "stats":
+        decider = EvidenceDecider()
+        model = {"id": EvidenceDecider.model, "name": "İstatistik filtresi"}
     script = _script(config.script, config.source)
     emit({"type": "stage", "stage": "loading", "message": "Veriler yükleniyor"})
     data, benchmark = load(config, script)
     allocation = config.cash / len(data)
     parts = windows(data, config.rounds)
     walk = _Rounds(config, data, benchmark, decider, emit, cancelled)
-    if config.mode == "ai":
+    if config.mode != "signals":
         plan = estimate(config, data)
         emit({"type": "plan", **plan})
+        emit({"type": "stage", "stage": "evidence",
+              "message": "Stratejinin geçmiş sinyalleri toplanıyor"})  # fmt: skip
+        walk.found = gather_evidence(config, script, data, benchmark)
         if config.learning != "off":
             letters = {d.code: research.letter(k) for k, d in enumerate(data)}
             walk.learner = Learner(
@@ -1230,12 +1529,30 @@ def run_blind(
                 coach=coach,
                 emit=emit,
                 horizon=learn.horizon(config.interval),
+                pool=walk.found.pool,
+                exits=walk.found.exits,
             )
     rows = walk.run(script, parts, allocation, revise)
     emit({"type": "stage", "stage": "summary", "message": "Sonuçlar hesaplanıyor"})
     signal_sims = list(walk.signals.values())
-    ai_sims = list(walk.ai.values()) if config.mode == "ai" else None
+    ai_sims = list(walk.ai.values()) if config.mode != "signals" else None
     result = summarize(config, data, benchmark, signal_sims, ai_sims, model)
+    if walk.found is not None:
+        pool = walk.found.pool
+        start = min(d.frame.index[d.first] for d in data)
+        result["evidence"] = {
+            "samples": len(pool.samples),
+            "before_test": len(pool.known(start)),
+            "exits": len(walk.found.exits.samples),
+            "stocks": len({s.code for s in pool.samples}),
+        }
+        result["audit"]["notes"].append(
+            "Benzer geçmiş sinyaller ve kurallar yalnızca karar anına kadar sonucu"
+            f" belli olmuş strateji sinyallerinden hesaplandı ({len(pool.samples)}"
+            f" işlem, {len(walk.found.exits.samples)} çıkış,"
+            f" {result['evidence']['stocks']} hisse); günlük ve piyasa bilgisi"
+            " saatlik kararda önceki günün kapanışına kadardır."
+        )
     if walk.strategy:
         result["ai"]["strategy"] = walk.strategy
     if len(parts) > 1:
@@ -1264,6 +1581,7 @@ class _Rounds:
         self.emit = emit
         self.cancelled = cancelled
         self.learner: Learner | None = None
+        self.found: Evidence | None = None
         self.strategy: dict[str, Any] | None = None
         self.signals = {d.code: _Joined(d, config.cash / len(data)) for d in data}
         self.ai = {d.code: _Joined(d, config.cash / len(data)) for d in data}
@@ -1325,15 +1643,20 @@ class _Rounds:
         return rows
 
     def _ai_window(self, script, wdata, cash, k, signals, reason):
-        if self.config.mode != "ai":
+        if self.config.mode == "signals":
             return None
+        if self.config.mode == "ai":
+            self.emit(
+                {
+                    "type": "stage",
+                    "stage": "strategy",
+                    "message": "Strateji özetleniyor",
+                }
+            )
+            self.strategy = strategy_context(script, wdata, self.config, self.decider)
+            self.emit({"type": "strategy", **self.strategy})
         self.emit(
-            {"type": "stage", "stage": "strategy", "message": "Strateji özetleniyor"}
-        )
-        self.strategy = strategy_context(script, wdata, self.config, self.decider)
-        self.emit({"type": "strategy", **self.strategy})
-        self.emit(
-            {"type": "stage", "stage": "deciding", "message": "Model karar veriyor"}
+            {"type": "stage", "stage": "deciding", "message": "Kararlar veriliyor"}
         )
         learner = self.learner
         if learner:
@@ -1354,6 +1677,8 @@ class _Rounds:
                 codes=codes,
                 on_close=learner.closed if learner else None,
                 round_no=k,
+                found=self.found,
+                rules=learner.journal.matching if learner else None,
             )
             for w in wdata
         ]
