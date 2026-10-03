@@ -42,10 +42,10 @@ def _memo(code, first, end, interval, adjust="splits_only", cache=False):
     key = (code, interval)
     if key not in _frames:
         if interval == "1d":
-            wide = _original(code, date(2018, 1, 1), date(2026, 10, 2), interval, adjust, cache=False)
+            wide = _original(code, date(2018, 1, 1), services.today(), interval, adjust, cache=False)
         else:
             limit = services.INTRADAY_LOOKBACK_DAYS.get(interval, 729)
-            wide = _original(code, services.today() - timedelta(days=limit), date(2026, 10, 2),
+            wide = _original(code, services.today() - timedelta(days=limit), services.today(),
                              interval, adjust, cache=False)
         _frames[key] = wide
     frame = _frames[key]
