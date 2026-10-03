@@ -300,7 +300,7 @@ export function render(root) {
         <span class="spacer"></span>${running ? `<button class="btn small" type="button" data-author-stop>${icon("stop", "sm")} Durdur</button>` : ""}</div>
       <form class="form" data-author-form>
         <label class="field">Hedef (isteğe bağlı)
-          <textarea name="goal" rows="2" maxlength="1000" placeholder="ör. Düşük riskli trend takibi, en fazla %8 zarar, az işlem">${esc(store.get("strategy.goal", ""))}</textarea></label>
+          <textarea name="goal" rows="2" maxlength="1000" placeholder="Boş bırakılırsa: trend takibi, her hissede çeyrekte en az 2 işlem. ör. En fazla %8 zarar, daha uzun tutma">${esc(store.get("strategy.goal", ""))}</textarea></label>
         <div class="row">
           <label class="field">Script adı (isteğe bağlı)<input name="name" maxlength="48" placeholder="otomatik: ai_enkai_…" pattern="[a-z0-9][a-z0-9_-]*"></label>
           <div class="field"><span>&nbsp;</span><button class="btn violet block" type="submit" ${running ? "disabled" : ""}>${icon("sparkle", "sm")} Yapay zekaya yazdır</button></div>
@@ -379,7 +379,7 @@ export function render(root) {
   // ------------------------------------------------------------- blind test
 
   const blindForm = {
-    script: store.get("strategy.script", "macd_trend"),
+    script: store.get("strategy.script", "supertrend_sik"),
     mode: store.get("strategy.mode", "ai"),
     model: store.get("strategy.model", ""),
     review: store.get("strategy.review", 0),

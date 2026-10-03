@@ -230,6 +230,18 @@ Web arayüzünde **Lab → AI Strateji** sayfası dört adımlı bir akış suna
 
 **Strateji bağlamı ve veto.** Karar modeli her sinyali stratejinin kendi mantığıyla değerlendirir: test başında scriptin iki cümlelik özeti ve türü (dönüş, trend, kırılım) bir kez sorulup önbelleğe alınır, stratejinin test öncesindeki yapay zekasız sonucu (işlem sayısı, kazançlı oran, ortalama getiri) her görünüme eklenir. Talimat sinyali varsayılan olarak uygulatır; stratejinin aradığı koşullar (ör. dönüş stratejisinde düşüş ve aşırı satım) ret nedeni değildir, yalnızca belirgin ek risk reddedilir. Kârlı bir sinyali kaçırmak da hata sayılır.
 
+**Trend takibi.** Script yazarının varsayılan hedefi (hedef boş bırakılırsa) trend takibidir: yükselen trendde pozisyonda kalmak, trend bozulunca çıkmak ve her hissede çeyrekte en az 2 işlem. Kör test sayfasının varsayılan scripti `supertrend_sik`tir (Supertrend, çarpan 2). ENKAI, TUPRS, THYAO, BIMAS, ASELS üzerinde 1 yıl eğitimle, yapay zekasız (sadece sinyaller) ölçümler:
+
+| Script | 2024-10 → 2025-10 | 2025-10 → 2026-10 |
+|---|---|---|
+| Dönüş (düşüşte alım, yapay zekanın ilk yazdığı) | %+15,8 · 27 işlem | %+4,4 · 28 işlem |
+| `supertrend` (çarpan 3) | %+23,0 · 24 işlem | %+25,0 · 16 işlem |
+| `supertrend_sik` (çarpan 2) | %+25,0 · 40 işlem | %+22,5 · 28 işlem |
+| `sma_cross` (10/50) | %+54,8 · 16 işlem | %+28,8 · 14 işlem |
+| Al-tut / XU100 | %+76,4 / %+24,5 | %+43,9 / %+10,5 |
+
+Trendi yeniden girişlerle ya da sıkı stoplarla parçalamak işlem sayısını artırır ama maliyet ve testere zararıyla getiriyi düşürür; ortalama uzunlukları gibi parametrelerde bir yılın en iyisi diğer yılın en kötülerinden olabilir. Bu yüzden iki dönemde de tutarlı kalan hassas Supertrend seçildi. Ölçümler yükselen bir piyasaya aittir; düşen piyasada trend takibi daha az işlem ve farklı sonuç verir.
+
 **Öğrenen kör test.** Kör test formundaki **Öğrenme** seçeneği:
 - **Karar günlüğü:** hisseler ortak bir tarih takviminde birlikte ilerler; her kararın sonucu yalnızca gerçekleştiği bardan sonraki kararlara gösterilir. AL kararının sonucu açtığı işlemdir; reddedilen girişin sonucu aynı sinyalin yapay zekasız işlemidir (kaçırılan ya da kaçınılan getiri); SAT/TUT kararları sonraki 10 barla ölçülür. Görünüme bir özet (alınan girişlerin kazançlı oranı, reddedilenlerin kaçının kâr ettireceği), son 6 sonuç ve ders notları eklenir. Her 6 yeni sonuçta asistan modeli günlüğü okuyup en fazla 5 maddelik ders notunu yeniden yazar. Hisseler harfle anılır, tarih yoktur; hisse adı ya da tarih içeren notlar atılır. Test bitişini ileri almak önceki hiçbir kararın görünümünü değiştirmez (testle doğrulanır).
 - **Günlük + script turları:** test dönemi 2–4 eşit pencereye bölünür. Her pencere sonunda açık pozisyonlar kapanır ("tur sonu"), sermaye sonraki pencereye taşınır ve script yazarı scripti pencerenin anonim raporu (yapay zeka, sinyaller, al-tut, XU100, hisse bazında sonuçlar, günlük özeti, ders notları) ve pencere sonuna kadar güncellenmiş sinyal araştırmasıyla geliştirir. Hedef: getiride XU100'ü ve yapay zekasız sonucu geçmek, her hissede pencere başına en az 1 işlem, al-tuttan küçük düşüş. Yeni script `<script>_t2`, `_t3`… olarak kaydedilir ve yalnızca sonraki pencerede kullanılır; doğrulanamazsa eski script sürer. Sonuçta tur tablosu ve ilk scriptin revizyonsuz tüm dönem sonucu da gösterilir.

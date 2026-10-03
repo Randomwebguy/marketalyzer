@@ -1,0 +1,16 @@
+//@version=5
+// Supertrend'in daha hassas hali: yükselişe dönünce alır, düşüşe dönünce satar.
+// Çarpan 2 olduğu için trendi daha erken yakalar ve standart Supertrend'den daha sık işlem yapar.
+strategy("Supertrend (sık)", overlay=true)
+
+factor = input.float(2.0, "Çarpan", minval=1.0, maxval=3.0, step=0.5)
+atrPeriod = input.int(10, "ATR periyodu", minval=7, maxval=21, step=7)
+
+[st, direction] = ta.supertrend(factor, atrPeriod)
+plot(direction < 0 ? st : na, "Yükseliş", color=color.green, style=plot.style_linebr)
+plot(direction > 0 ? st : na, "Düşüş", color=color.red, style=plot.style_linebr)
+
+if ta.change(direction) < 0
+    strategy.entry("Al", strategy.long)
+if ta.change(direction) > 0
+    strategy.close("Al")

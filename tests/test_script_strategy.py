@@ -67,6 +67,12 @@ def test_every_library_strategy_backtests(prices):
         assert report.summary()["trades"] is not None, name
 
 
+def test_fast_supertrend_trades_at_least_as_often(prices):
+    fast = backtest("script:supertrend_sik", prices).summary()["trades"]
+    slow = backtest("script:supertrend", prices).summary()["trades"]
+    assert fast >= slow > 0
+
+
 def test_strategy_class_is_cached_and_exposes_inputs():
     first = get_strategy("script:rsi_reversion")
     assert first is get_strategy("script:rsi_reversion")

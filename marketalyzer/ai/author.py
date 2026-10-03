@@ -63,11 +63,19 @@ def system_prompt() -> str:
     return "\n\n".join([ROLE, LANGUAGE, _function_list()])
 
 
+# Trend following beat dip buying on BIST large caps in both 2024-2026 test
+# years; holding trends needs few exits, so the frequency target is modest.
+DEFAULT_GOAL = (
+    "Trend takibi: yükselen trendde pozisyonda kal, trend bozulunca çık; trend dönüşünü"
+    " erken yakalayan hassas bir trend göstergesi (ör. Supertrend, hızlı/yavaş ortalama)"
+    " kullan. Her hissede çeyrekte en az 2 işlem olsun, ama her işlem maliyeti"
+    " karşılamalı; trendi gereksiz çıkışlarla parçalama."
+)
+
+
 def user_prompt(summary: str, goal: str | None, count: int) -> str:
     """Return the request with the anonymous study."""
-    goal = (goal or "").strip()[:MAX_GOAL] or (
-        "Dengeli risk ve getiri; az ama kaliteli işlem."
-    )
+    goal = (goal or "").strip()[:MAX_GOAL] or DEFAULT_GOAL
     return (
         f"Hedef: {goal}\nHisse sayısı: {count}\n\n"
         f"Sinyal araştırması (yalnızca eğitim dönemi):\n{summary}"

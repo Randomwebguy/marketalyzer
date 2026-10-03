@@ -563,6 +563,14 @@ def test_revised_names_are_valid_script_names():
     assert len(blind.revised_name("a" * 48, 4)) <= 48
 
 
+def test_author_defaults_to_trend_following_with_frequent_trades():
+    prompt = author.user_prompt("özet", None, 5)
+    assert "Trend takibi" in prompt and "en az 2 işlem" in prompt
+    assert author.user_prompt("özet", "Kendi hedefim", 5).startswith(
+        "Hedef: Kendi hedefim"
+    )
+
+
 def test_author_rejects_scripts_without_entries():
     never = STRATEGY.replace("ta.crossover(f, s)", "close < 0")
     stream, _ = stream_replies(*[f"```pine\n{never}```"] * author.MAX_ATTEMPTS)
