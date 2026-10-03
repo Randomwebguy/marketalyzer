@@ -123,10 +123,18 @@ def api_error(
 ) -> OpenRouterError:
     """Build the error for an HTTP status and the provider's own error text."""
     detail = " ".join((detail or "").split())[:MAX_DETAIL]
+    text = detail.lower()
+    if status == 403 and "locked" in text and "top_up" in text:
+        status = 402  # fal.ai locks an account whose credit ran out
     message = _base_message(status, detail, name)
     if detail:
         message = f"{message} ({detail})"
     return OpenRouterError(message, status)
+
+
+def account_blocked(error: OpenRouterError) -> bool:
+    """Return whether every later request would fail too: a bad key or no credit."""
+    return error.status in (401, 402)
 
 
 def _network_error(error: requests.RequestException, name: str) -> OpenRouterError:

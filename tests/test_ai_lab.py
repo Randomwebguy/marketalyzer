@@ -770,3 +770,27 @@ def test_openrouter_complete_chat(monkeypatch):
 def test_frame_dates_are_tz_consistent():
     frame = frame_of()
     assert isinstance(frame.index, pd.DatetimeIndex)
+
+
+def test_an_account_out_of_credit_stops_the_test_instead_of_holding():
+    locked = openrouter.api_error(403, "User is locked. Reason: TOP_UP.", "fal.ai")
+    assert locked.status == 402 and "bakiyesi yetersiz" in locked.message
+    assert openrouter.api_error(403, "flagged", "fal.ai").status == 403
+
+    def broke(*args, **kwargs):
+        if is_brief(args[2]):
+            return brief_answer()
+        raise locked
+
+    with pytest.raises(OpenRouterError, match="bakiyesi yetersiz"):
+        blind.run_blind(config(symbols=["THYAO"]), Decider("k", "m", complete=broke))
+
+    def refused(*args, **kwargs):
+        if is_brief(args[2]):
+            return brief_answer()
+        raise openrouter.api_error(403, "flagged", "fal.ai")
+
+    result = blind.run_blind(
+        config(symbols=["THYAO"]), Decider("k", "m", complete=refused)
+    )
+    assert result["ai"]["errors"] == result["ai"]["decisions"] > 0

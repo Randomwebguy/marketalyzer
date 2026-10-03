@@ -1108,7 +1108,7 @@ def create_app(
                 years=request.years,
                 lessons=learned["lessons"] if learned else None,
             )
-        except (ValueError, ScriptError) as error:
+        except (ValueError, ScriptError, OpenRouterError) as error:
             raise _fail(error) from error
         return {
             "model": model_brief(decider, info),

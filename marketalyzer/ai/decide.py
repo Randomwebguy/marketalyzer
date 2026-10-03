@@ -32,6 +32,7 @@ import pandas as pd
 from marketalyzer.ai.openrouter import (
     OpenRouterError,
     _version,
+    account_blocked,
     complete_chat,
     list_models,
 )
@@ -612,7 +613,11 @@ class Decider:
             )
 
     def decide(self, view: dict[str, Any]) -> Decision:
-        """Decide on one snapshot; errors come back as a "hold" with ``error``."""
+        """Decide on one snapshot; errors come back as a "hold" with ``error``.
+
+        A bad key or an account out of credit raises instead: every later
+        decision would fail too, and a test of "holds" would mislead.
+        """
         holding = (view.get("pozisyon") or {}).get("durum") == "var"
         user = json.dumps(view, ensure_ascii=False, separators=(",", ":"))
         messages = [
@@ -631,6 +636,8 @@ class Decider:
             answer = self.ask(messages)
             decision = parse_decision(answer["text"], holding)
         except (OpenRouterError, ValueError) as error:
+            if isinstance(error, OpenRouterError) and account_blocked(error):
+                raise
             message = (
                 error.message if isinstance(error, OpenRouterError) else str(error)
             )
