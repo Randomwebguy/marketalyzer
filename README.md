@@ -273,6 +273,32 @@ Genel göstergeler stratejiden ayrı adlandırılır (`supertrend_genel` çarpan
 
 2019–2024-09 arasında 20 büyük hissedeki 670 `supertrend_sik` işleminde yapılan ileriye yürüyen sınamada, bu ölçümlerden kurulan filtrelerin (benzer sinyal, ağırlıklı benzer sinyal, ridge regresyon) hiçbiri "her sinyali al" politikasını toplamda geçemedi; reddedilen işlemler de ortalamada kazandırıyordu. Bu yüzden talimat, ancak benzer sinyaller ortalamada zarar ettiriyorsa reddetmeyi söyler. Aynı dönemde `supertrend_sik`'in 731 çıkış sinyalinden sonraki 10 günde fiyat ortalama %+2,7 yükseldi (%58,5'inde) ve bu her yıl artıydı; hızlı çıkışlar çoğu zaman erkendi.
 
+**Kıyas (2026-10-03).** Ölçüm `supertrend_sik` ile, karar günlüğü açık yapıldı. A ve B 20 büyük hissede günlük bar; S 8 hisselik sepette son 3 ayın saatlik barı:
+
+| Karar katmanı | A (2024-10 → 2025-10) | B (2025-10 → 2026-10) | S (2026-07 → 2026-10) |
+|---|---|---|---|
+| Sadece sinyaller | %+4,4 | %+5,7 | %−8,4 |
+| Eski tasarım, Gemini Flash | %+14,5 | %+5,4 | %−2,9 |
+| Eski tasarım, Claude Haiku 4.5 | %+6,9 | %−3,4 | %−1,5 |
+| Yeni tasarım, Claude Haiku 4.5 | %+11,3 | %+1,2 | %−1,0 |
+| Eski tasarım, Claude Sonnet 5.5 | %+10,3 | %+1,3 | %−2,2 |
+| Yeni tasarım, Claude Sonnet 5.5 | %+17,7 | %+0,2 | %−0,7 |
+| İstatistik filtresi | %+16,8 | %+2,0 | %−4,0 |
+| Al-tut / XU100 | %+23,4 / %+24,5 | %+9,1 / %+10,7 | %−11,3 / %−15,1 |
+
+- **Tasarım:** aynı modelle yeni tasarım altı karşılaştırmanın beşinde öndeydi.
+- **A dönemi:** kazanç çoğunlukla çıkış sinyallerine rağmen tutmaktan geldi. Sonnet'in reddettiği 6 giriş, alınsaydı ortalama %−5,2 getirecekti.
+- **B dönemi:** benzer-sinyal kanıtı ters çalıştı. Kanıtın zararda gösterdiği 42 sinyal gerçekte ortalama %+5,7 kazandırdı. Bu yüzden kanıta dayanan bütün kollar sinyallerin gerisinde kaldı.
+- **S dönemi:** düşen piyasada az işlem yaparak kaybı küçülttüler.
+- **Al-tut:** yükselen iki yılda hiçbiri al-tutu geçemedi.
+
+**Geliştirmede Claude aboneliğiyle karar** (`marketalyzer/ai/claude_cli.py`): `claude_cli.decider()` (Haiku; `decider("claude-sonnet-5-5")` ile Sonnet) ve `claude_cli.coach()` (Sonnet), `blind.run_blind(config, decider, coach=coach)` ile kullanılır. Her istek `claude -p` ile çalışır:
+- araç, MCP, kayıtlı oturum ve düşünme kapalıdır;
+- yalnızca proje ayarları yüklenir; kullanıcının Claude Code ayarlarındaki anahtar ve ağ geçidi kullanılmaz ve değiştirilmez;
+- API kredisi harcanmaz, planın kullanım sınırı geçerlidir.
+
+Komut satırının bir kez `claude auth login` ile Claude hesabına bağlanması gerekir. Giriş yoksa ya da plan sınırı dolarsa kör test açık bir mesajla durur.
+
 Her yapay zekalı ve istatistik filtreli kör test `~/.local/share/marketalyzer/ai/lab/runs/` altına kaydedilir (`/api/lab/runs`). Canlı karar, aynı scriptle öğrenen en son kör testin kurallarını (ya da ders notlarını) kullanır.
 
 **Hızlı karar modeli.** Kararlar küçük ve hızlı modellerle verilir; istek OpenRouter'da en düşük gecikmeli sağlayıcıya yönlendirilir (`provider.sort = latency`), sıcaklık 0'dır ve yanıt tek satır JSON'dur (`{"karar", "guven", "gerekce"}`). Ön ayarlar her ailenin OpenRouter'daki en yeni sürümüne çözülür:
