@@ -360,6 +360,25 @@ Kütüphanedeki 8 strateji, istatistik filtresi ve momentum rotasyonu 15 büyük
   - Hiçbir scalping stratejisi elde tutmayı geçemedi.
 - **Uyarı:** coinler bugünün büyüklerinden seçildi (2022'de çöken LUNA ve FTT gibi coinler listede yok); bu, al-tutu ve rotasyonu iyimser gösterir.
 
+**Coin başına uyarlama, ileriye yürüyerek** (`scripts/crypto/adaptive.py`, `ensemble.py`, `momentum_trend.py`):
+
+Her çeyrek başında her coin için 46 aday (supertrend, SMA kesişimi, Donchian ve MACD trend ayarları, çoklu trend, elde tutma) o coinin son 12 ayında puanlandı ve en iyisi sonraki çeyrekte işlem yaptı. Portföy her çeyrek coinlere eşit dağıtıldı. 2022 başından 2026 Ekim'e, 100.000 $ ile:
+
+| Yöntem | Bitiş | 2022 | 2025 |
+|---|---|---|---|
+| Al-tut / BTC | 90.756 $ / 182.518 $ | %−70 / %−64 | %−32 / %−6 |
+| supertrend_sik | 186.371 $ | %−36 | %−38 |
+| **supertrend_sik + BTC 50 günlük filtresi** | **388.583 $** | **%−3** | %−17 |
+| Coin başına uyarlanmış, BTC filtreli (en iyi varyant) | 252.290 $ | %−2 | %−20 |
+| Coin başına uyarlanmış, filtresiz | 185.821 $ | %−23 | %−28 |
+| 7 stratejili topluluk, BTC filtreli | 151.706 $ | %−30 | %−19 |
+| Aynı kural, son 90 günün en güçlü 5 coininde | 411.746 $ | %−13 | %−19 |
+| Aynı kural, en güçlü 3 coinde | 666.868 $ | %−16 | %−14 |
+
+- **Coin başına uyarlama** (getiriye ya da getiri/düşüşe göre seçim, elde tutmalı ya da elde tutmasız), herkese aynı uygulanan basit kuraldan kötü çıktı: bir coinde son 12 ayda en iyi çalışan ayar sonraki çeyreğe taşınmıyor.
+- **Getiriyi artıran,** coin başına ayar gerektirmeyen iki kenarın birleşimi oldu: BTC trend filtresi ve momentumla coin seçimi. En güçlü 3 coin daha yoğun ve oynak; 2024'teki birkaç ralliye dayanıyor.
+- **Son 3 ay** (Temmuz – 3 Ekim 2026) kesintisiz bir yükselişti: al-tut 147.792 $, BTC 144.667 $, stratejiler 108–121 bin $. Zamanlama stratejileri çöküşten kaçınmak için yükselişin bir kısmını kaçırır (2022: %−3 ve %−70).
+
 **Ek veri kaynakları (2026-10-03 incelemesi).**
 
 - **Bilanço:**
