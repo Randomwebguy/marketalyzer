@@ -304,6 +304,31 @@ Genel göstergeler stratejiden ayrı adlandırılır (`supertrend_genel` çarpan
   - Bu dönemin en iyi adayı "XU100 20 günde %−3'ten fazla düştüyse yarım boyut"tu. İstatistik filtresiyle %+15,5 / %+9,0 / %−8,9 verdi: kuralsız sürümden A'da 4, B'de 4,5 puan düşük, S'de yalnızca 1 puan iyi.
 - **Kanıt isabeti kapısı (denendi, bırakıldı):** benzer-sinyal kanıtını yalnızca son 30 sinyalde isabetliyse göstermek A'da kazancı yarıya indirdi, B'yi düzeltmedi (Sonnet: %+9,2 ve %+0,6). Kanıtın son isabeti sonraki isabetini öngörmüyor.
 
+**Başka piyasalarda deney** (`scripts/market_experiment.py`, ürün özelliği değil):
+
+- **Kurulum:** aynı kör test ve tasarım (`supertrend_sik`, BIST verisiyle seçilmiş kurallar) ABD'nin ve kripto paraların bugünkü büyüklerinde denendi.
+  - ABD: A ve B'de 20 büyük hisse, S'de ayrı 8 hisse. Komisyon yok, kayma %0,05; ölçüt SPY.
+  - Kripto: A ve B'de 15 büyük coin, S'de 8 büyük coin. %0,1 komisyon ve %0,1 kayma; ölçüt BTC.
+- **Dönemler:** A ve B günlük bar, S son 3 ayın saatlik barı.
+
+| | ABD A | ABD B | ABD S | Kripto A | Kripto B | Kripto S |
+|---|---|---|---|---|---|---|
+| Sadece sinyaller | %+5,0 | %+2,6 | %−14,3 | %+62,9 | %−18,8 | %+12,7 |
+| İstatistik filtresi, girişleri eleyerek | %+5,7 | %+3,2 | %−8,7 | %+96,4 | %−32,7 | %+10,7 |
+| İstatistik filtresi, hepsini al | %+7,5 | %+7,5 | %−14,5 | %+93,0 | %−30,1 | %+25,8 |
+| Sonnet 5.5, hepsini al | %+0,3 | %+3,8 | %−14,7 | %+89,8 | %−20,7 | %+22,1 |
+| Momentum rotasyonu 9 ay / 6 ay | %+17,7 / %+14,9 | %+2,4 / %+0,1 | — | %+81,8 / %+121,1 | %−38,3 / %−44,5 | — |
+| Eşit ağırlıklı al-tut | %+17,8 | %+10,4 | %−13,2 | %+113,6 | %−46,3 | %+44,6 |
+| Ölçüt (SPY / BTC) | %+17,5 | %+15,0 | %+2,6 | %+95,7 | %−30,0 | %+37,3 |
+
+- **ABD:** bütün kollar al-tutun ve SPY'ın çok gerisinde kaldı; momentum rotasyonu eşit ağırlıklı sepeti de geçemedi. Bu strateji ve tasarım ABD büyük hisselerine taşınmıyor.
+- **Kripto:** karar katmanı sinyallere belirgin değer kattı.
+  - Sonnet çıkışlarda yükselişte tutup düşüşte sattı. Sharpe oranı A'da 1,48 (al-tut 1,42, sinyaller 1,27) oldu.
+  - En büyük düşüş A'da %−42 (al-tut %−52), B'de %−36 (al-tut %−64).
+  - İstatistik filtresinin giriş seçimi kripto'da rastgele seçimlerin %99, %64 ve %96'sını geçti; ABD'de %17, %16 ve %45'ini.
+- **Genel:** "hepsini al" ve çıkışta tutmak sistemi al-tuta yaklaştırıyor: yükselişte kazancı artırıyor, düşüşte kaybı. Sonnet düşen piyasalarda (kripto B, BIST S) bunu kurala göre daha iyi dengeledi.
+- **Uyarı:** sepetler bugünün büyüklerinden seçildi (hayatta kalma yanlılığı) ve dönemler kısa.
+
 **Ek veri kaynakları (2026-10-03 incelemesi).**
 
 - **Bilanço:**
