@@ -269,6 +269,14 @@ Tahmin düğmesi testten önce en fazla kaç karar gerektiğini, modelin fiyatı
 
 **AI Strateji → 5 · Momentum rotasyonu** (`marketalyzer/rotation.py`, `POST /api/lab/rotation`): her ayın son kapanışında hisse listesi (varsayılan: BIST'in 20 büyük şirketi) son 6, 9 ya da 12 aydaki getiriye göre sıralanır (son ay hariç); en güçlü 3, 5 ya da 7 hisse eşit paylarla ertesi gün açılışta alınır, listeden düşenler satılır, kalanlara dokunulmaz. Sıralama yalnızca karar kapanışına kadarki fiyatları kullanır; işlemler tam lot, BIST komisyonu, BSMV ve kaymayla yapılır. İsteğe bağlı filtreler: 200 günlük ortalamasının altındaki hisseyi almamak (o pay nakitte kalır) ve XU100 200 günlük ortalamasının altındayken tamamen nakde geçmek. Sonuçta eşit ağırlıklı al-tut ve XU100 ile karşılaştırma, ay ay değişimler ve bu ay tutulacak hisseler (emir fişiyle) gösterilir. Bugünün büyük şirketlerinden seçilen liste hayatta kalma yanlılığı taşır: dönem içinde endeksten düşenler yoktur.
 
+**Sanal hesapta otomatik rotasyon** (`marketalyzer/paper/autorotate.py`, `marketalyzer-rotation`): rotasyon kartındaki "Bu ayarlarla otomatik uygula" düğmesi planı kaydeder ve hemen en son kapanışa göre alır. Sonra her ayın ilk işlem gününde önceki ayın son kapanışına göre yeniden sıralar: listeden düşenleri satar, satışlar gerçekleşince yenileri alır. Emirler piyasa emridir ve saatlik barların açılışında gerçekleşir. Rotasyon yalnızca kendi aldığı hisseleri satar; hesaptaki diğer pozisyonlara dokunmaz. Plan ve geçmişi `~/.local/share/marketalyzer/rotation/<hesap>.json` dosyasındadır. Planı ilerletmek için hafta içi işlem saatlerinde sık aralıkla çalıştırın:
+
+```bash
+marketalyzer-rotation step --account web
+```
+
+VPS'te bunu `marketalyzer-rotation.timer` (hafta içi 09:00-19:45, 15 dakikada bir, İstanbul saati) yapar. Aynı mantık `autorotate.replay` ile geçmiş saatlik barlarda canlıymış gibi oynatılabilir.
+
 Neden bu yöntem: 2021-10 → 2026-09 arasındaki beş ayrı yılda, yapay zekasız ve aynı maliyetlerle yapılan ölçümler (araştırma düzeneğinde, aylık eşit ağırlığa dönerek):
 
 | 20 büyük hisse | Ortanca yıl | En kötü yıl | XU100'ü geçtiği yıl |

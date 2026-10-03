@@ -26,7 +26,7 @@ const STAGES = {
   summary: "Sonuçlar hesaplanıyor",
 };
 // Results survive leaving the page; the module stays loaded.
-const memory = { study: null, author: null, blind: null, live: null, rotation: null, presets: null, scripts: null };
+const memory = { study: null, author: null, blind: null, live: null, rotation: null, auto: null, presets: null, scripts: null };
 // Turkey's large caps, the rotation's default universe (with survivorship bias).
 const LARGE_CAPS = [
   "AKBNK", "GARAN", "ISCTR", "YKBNK", "KCHOL", "SAHOL", "SISE", "EREGL", "FROTO", "TOASO",
@@ -799,8 +799,84 @@ export function render(root) {
         <label class="check"><input type="checkbox" name="market" ${rotationForm.market ? "checked" : ""}> XU100 200 günlük ortalamasının altındayken tamamen nakde geç</label>
         <div class="row-flex"><button class="btn primary" type="submit" data-rotation-run>${icon("play", "sm")} Rotasyonu test et</button></div>
       </form>
+      <div data-rotation-auto>${autoHtml()}</div>
       <div data-rotation-result></div>`;
     if (r) showRotation($("[data-rotation-result]", box), r);
+  }
+
+  const PHASES = { idle: "bekliyor", selling: "satışlar gerçekleşiyor", buying: "alışlar gerçekleşiyor" };
+
+  function autoHtml() {
+    const plan = memory.auto?.plan;
+    const on = Boolean(plan?.enabled);
+    const last = plan?.history?.at(-1);
+    return `
+      <div class="divider"></div>
+      <div class="setting"><div class="grow"><b>Sanal hesapta her ay otomatik uygula</b>
+        <span>Açıkken her ayın ilk işlem gününde önceki ayın son kapanışına göre sıralanır; listeden düşenler satılır, satışlar gerçekleşince yeniler
+          alınır. Emirler saatlik barların açılışında gerçekleşir. İlk açılışta en son kapanışa göre hemen alınır. Rotasyon yalnızca kendi aldığı
+          hisseleri satar; elle aldıklarınıza dokunmaz.</span></div>
+        <span class="chip tag ${on ? "green" : ""}">${on ? "açık" : "kapalı"}</span></div>
+      <div class="row-flex" style="margin-top:8px">
+        <button class="btn violet" type="button" data-auto-on>${icon("zap", "sm")} ${on ? "Ayarları güncelle" : "Bu ayarlarla otomatik uygula"}</button>
+        ${plan ? `<button class="btn" type="button" data-auto-step>${icon("refresh", "sm")} Şimdi kontrol et</button>` : ""}
+        ${on ? '<button class="btn ghost" type="button" data-auto-off>Durdur</button>' : ""}
+      </div>
+      ${plan ? `<div class="summary-rows" style="margin-top:10px">
+        <div><span>Ayarlar</span><b>${plan.symbols.length} hisse · ${plan.lookback_months} ay · en iyi ${plan.top}${plan.absolute ? " · 200 gün filtresi" : ""}${plan.market ? " · XU100 filtresi" : ""}</b></div>
+        <div><span>Durum</span><b>${esc(PHASES[plan.phase] ?? plan.phase)}${plan.month ? ` · son karar ${esc(plan.month)}` : ""}</b></div>
+        <div><span>Rotasyonun tuttukları</span><b>${plan.owned.length ? esc(plan.owned.join(", ")) : "—"}</b></div>
+        ${last ? `<div><span>Son seçim (${esc(fmtDate(last.decided_on))} kapanışı)</span><b>${last.picks.length ? esc(last.picks.map((p) => p.symbol).join(", ")) : "nakit"}</b></div>` : ""}
+        ${last?.errors?.length ? `<div><span>Uyarılar</span><b class="error">${esc(last.errors.join("; "))}</b></div>` : ""}
+      </div>
+      ${plan.history.length ? `<details class="more" style="margin-top:8px"><summary>Otomatik rotasyon geçmişi (${plan.history.length})</summary>
+        <div class="table-wrap">${tableHtml([
+          { key: "at", label: "Karar anı", format: tipTime },
+          { key: "decided_on", label: "Kapanış", format: (t) => fmtDate(t) },
+          { key: "picks", label: "Seçilenler", format: (v) => (v.length ? v.map((p) => p.symbol).join(", ") : "nakit") },
+          { key: "sold", label: "Satılan", format: (v) => (v.length ? v.join(", ") : "—") },
+          { key: "bought", label: "Alınan", format: (v) => (v.length ? v.join(", ") : "—") },
+        ], plan.history.slice().reverse())}</div></details>` : ""}` : ""}`;
+  }
+
+  function redrawAuto() {
+    const box = $("[data-rotation-auto]", root);
+    if (box) box.innerHTML = autoHtml();
+  }
+
+  async function loadAuto() {
+    memory.auto = await api("/api/rotation/auto").catch(() => null);
+    redrawAuto();
+  }
+
+  function autoBody(enabled) {
+    return {
+      enabled,
+      symbols: rotationForm.symbols.split(/[\s,;]+/).map((s) => s.trim().toUpperCase()).filter(Boolean),
+      lookback_months: Number(rotationForm.lookback),
+      top: Number(rotationForm.top),
+      absolute: rotationForm.absolute,
+      market: rotationForm.market,
+    };
+  }
+
+  async function autoAction(button, kind) {
+    busy(button, true, kind === "off" ? "Durduruluyor…" : "Uygulanıyor…");
+    try {
+      if (kind !== "step") memory.auto = await api("/api/rotation/auto", autoBody(kind === "on"));
+      if (kind !== "off") {
+        const report = await api("/api/rotation/auto/step", {});
+        if (report.skipped) toast(report.reason);
+        else if (report.orders?.length) toast(`${report.orders.length} emir verildi; saatlik barın açılışında gerçekleşecek.`);
+        else toast("Kontrol edildi; yeni emir yok.");
+        memory.auto = await api("/api/rotation/auto");
+      } else {
+        toast("Otomatik rotasyon durduruldu; pozisyonlar korunuyor.");
+      }
+    } catch (error) {
+      toast(error.message, "error");
+    }
+    redrawAuto();
   }
 
   function showRotation(host, r) {
@@ -951,6 +1027,10 @@ export function render(root) {
       return;
     }
     if (event.target.closest("[data-live-run]")) return runLive(event.target.closest("[data-live-run]"));
+    for (const kind of ["on", "off", "step"]) {
+      const button = event.target.closest(`[data-auto-${kind}]`);
+      if (button) return autoAction(button, kind);
+    }
     const order = event.target.closest("[data-order]");
     if (order) emit("order", order.dataset.order);
   });
@@ -962,6 +1042,7 @@ export function render(root) {
   drawBlind();
   drawLive();
   drawRotation();
+  loadAuto();
   loadOptions();
   return () => {
     authorAbort?.abort();

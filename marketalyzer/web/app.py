@@ -12,6 +12,7 @@ import os
 import secrets
 import tempfile
 import uuid
+from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal
@@ -49,6 +50,7 @@ from marketalyzer.ai.openrouter import (
 )
 from marketalyzer.ai.settings import load_settings, public_settings, save_settings
 from marketalyzer.backtest.costs import BistCosts
+from marketalyzer.paper import autorotate
 from marketalyzer.paper.account import OrderRejected, PaperAccount
 from marketalyzer.paper.cli import account_path
 from marketalyzer.paper.feed import ProviderFeed
@@ -275,6 +277,22 @@ class RotationRequest(Costs):
             costs=self.costs(),
             slippage=self.slippage,
         )
+
+
+class AutoRotationRequest(BaseModel):
+    """Turn the paper account's monthly rotation on or off, with its settings."""
+
+    enabled: bool = True
+    symbols: list[str] = Field(
+        default_factory=lambda: list(rotation.LARGE_CAPS),
+        min_length=2,
+        max_length=rotation.MAX_SYMBOLS,
+    )
+    lookback_months: int = Field(6, ge=3, le=12)
+    skip_months: int = Field(1, ge=0, le=2)
+    top: int = Field(5, ge=1, le=rotation.MAX_SYMBOLS)
+    absolute: bool = False
+    market: bool = False
 
 
 class LiveRequest(BaseModel):
@@ -1022,6 +1040,31 @@ def create_app(
             return await asyncio.to_thread(rotation.run_rotation, config)
         except ValueError as error:
             raise _fail(error) from error
+
+    def rotation_state() -> dict[str, Any]:
+        plan = autorotate.load_plan(account_name)
+        return {"plan": asdict(plan) if plan else None, "account": account_name}
+
+    @app.get("/api/rotation/auto")
+    def rotation_auto() -> dict[str, Any]:
+        return rotation_state()
+
+    @app.post("/api/rotation/auto")
+    def rotation_auto_save(request: AutoRotationRequest) -> dict[str, Any]:
+        plan = autorotate.load_plan(account_name) or autorotate.Plan()
+        for key, value in request.model_dump().items():
+            setattr(plan, key, value)
+        try:
+            autorotate.save_plan(account_name, plan)
+        except ValueError as error:
+            raise _fail(error) from error
+        return rotation_state()
+
+    @app.post("/api/rotation/auto/step")
+    async def rotation_auto_step() -> dict[str, Any]:
+        return await asyncio.to_thread(
+            autorotate.step_account, account_name, autorotate.live_feed()
+        )
 
     @app.get("/api/lab/runs")
     def lab_runs() -> dict[str, Any]:
