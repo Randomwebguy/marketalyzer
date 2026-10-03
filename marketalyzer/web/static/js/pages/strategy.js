@@ -18,6 +18,7 @@ const LEARNING = [
   ["rounds", "Günlük + script turları"],
 ];
 const ROUNDS = [2, 3, 4];
+const INTERVALS = [["1d", "1 gün"], ["1h", "1 saat"], ["1W", "1 hafta"]];
 const STAGES = {
   study: "Sinyaller inceleniyor", writing: "Model scripti yazıyor", fixing: "Model scripti düzeltiyor",
   checking: "Script doğrulanıyor", saved: "Kaydedildi", loading: "Veriler yükleniyor",
@@ -388,6 +389,7 @@ export function render(root) {
     cache: store.get("strategy.cache", true),
     learning: store.get("strategy.learning", "off"),
     rounds: store.get("strategy.rounds", 4),
+    interval: store.get("strategy.interval", "1d"),
   };
   let blindAbort = null;
   let blindJob = null;
@@ -439,6 +441,7 @@ export function render(root) {
       use_cache: blindForm.cache,
       learning: blindForm.mode === "ai" ? blindForm.learning : "off",
       rounds: Number(blindForm.rounds) || 4,
+      interval: blindForm.interval,
     };
   }
 
@@ -470,6 +473,11 @@ export function render(root) {
           ${blindForm.learning === "rounds" ? `<label class="field">Tur sayısı<select name="rounds">${ROUNDS.map((n) => `<option value="${n}" ${Number(blindForm.rounds) === n ? "selected" : ""}>${n} pencere</option>`).join("")}</select>
             <span class="hint">Test dönemi eşit pencerelere bölünür; script her pencere sonunda yalnızca o güne kadarki veriyle geliştirilir ve sonraki pencerede kullanılır.</span></label>` : ""}
         </div>` : ""}
+        <div class="row">
+          <label class="field">Zaman dilimi<select name="interval">${INTERVALS.map(([v, l]) => `<option value="${v}" ${blindForm.interval === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+            <span class="hint">${blindForm.interval === "1h" ? "Saatlik veri yalnızca son 2 yıl için var; eğitim ve test bu aralığa sığmalı. Karar sayısı ve maliyet günlüğün yaklaşık 9 katıdır." : "Karar her barın kapanışında verilir, emir sonraki barın açılışında gerçekleşir."}</span></label>
+          <span></span>
+        </div>
         <div class="row">
           <label class="field">Zarar durdur % (isteğe bağlı)<input name="stop" type="number" min="0.5" max="49" step="0.5" value="${esc(blindForm.stop)}" placeholder="script belirler"></label>
           <label class="field">Sermaye (TL, hisselere eşit bölünür)<input name="cash" type="number" min="1000" step="1000" value="${esc(blindForm.cash)}"></label>
@@ -519,7 +527,7 @@ export function render(root) {
       ${b.lessons?.length && blindAbort ? `<div class="notice" style="margin:8px 0">${icon("sparkle", "sm")} <b>Ders notları</b>
         <ul style="margin:4px 0 0 18px">${b.lessons.map((lesson) => `<li>${esc(lesson)}</li>`).join("")}</ul></div>` : ""}
       <div class="table-wrap decision-log">${tableHtml([
-        { key: "time", label: "Bar", format: (t) => fmtDate(t) },
+        { key: "time", label: "Bar", format: tipTime },
         { key: "symbol", label: "Hisse" },
         { key: "event", label: "Olay" },
         { key: "label", label: "Karar", html: (d) => decisionChip(d.label) },
@@ -675,7 +683,7 @@ export function render(root) {
       ], r.symbols)}</div>
       ${ai ? `<details class="more" style="margin-top:12px"><summary>Tüm kararlar (${r.decisions.length})</summary>
         <div class="table-wrap">${tableHtml([
-          { key: "time", label: "Bar", format: (t) => fmtDate(t) },
+          { key: "time", label: "Bar", format: tipTime },
           { key: "symbol", label: "Hisse" },
           { key: "event", label: "Olay" },
           { key: "signals", label: "Aktif sinyaller", format: (v) => (v.length ? v.join("; ") : "—") },
@@ -683,7 +691,7 @@ export function render(root) {
           { key: "confidence", label: "Güven", num: true, format: (v) => (v == null ? "—" : `%${v}`) },
           { key: "reason", label: "Gerekçe", html: (d) => (d.error ? `<span class="error">${esc(d.error)}</span>` : esc(d.reason)) },
           ...(r.learning ? [{ key: "outcome_pct", label: "Sonuç", num: true, html: outcomeCell }] : []),
-          { key: "data_end", label: "Gördüğü son bar", format: (t) => fmtDate(t) },
+          { key: "data_end", label: "Gördüğü son bar", format: tipTime },
         ], r.decisions.slice().reverse())}</div></details>` : ""}
       <details class="more" style="margin-top:8px"><summary>İşlemler (${(ai ? r.trades : r.signal_trades).length})</summary>
         <div class="table-wrap">${tableHtml([
@@ -728,7 +736,7 @@ export function render(root) {
           <ul style="margin:4px 0 0 18px">${live.lessons.map((lesson) => `<li>${esc(lesson)}</li>`).join("")}</ul></div>` : ""}
         <div class="table-wrap" style="margin-top:8px">${tableHtml([
           { key: "symbol", label: "Hisse", html: (d) => `<b>${esc(d.symbol)}</b>${d.held ? `<div class="muted small">${d.held} lot</div>` : ""}` },
-          { key: "time", label: "Bar", format: (t) => fmtDate(t) },
+          { key: "time", label: "Bar", format: tipTime },
           { key: "close", label: "Kapanış", num: true, format: (v) => num(v) },
           { key: "event", label: "Olay" },
           { key: "label", label: "Karar", html: (d) => decisionChip(d.label) },
@@ -777,8 +785,9 @@ export function render(root) {
     if (el.name === "cache") blindForm.cache = el.checked;
     if (el.name === "learning") blindForm.learning = el.value;
     if (el.name === "rounds") blindForm.rounds = Number(el.value);
+    if (el.name === "interval") blindForm.interval = el.value;
     for (const [key, value] of Object.entries(blindForm)) store.set(`strategy.${key}`, value);
-    if (el.name === "learning") {
+    if (el.name === "learning" || el.name === "interval") {
       drawBlind();
       return;
     }

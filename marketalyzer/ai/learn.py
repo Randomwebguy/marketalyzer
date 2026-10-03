@@ -28,8 +28,17 @@ _DATE = re.compile(r"\b(19|20)\d\d-\d\d-\d\d\b")
 TYPES = ("dönüş", "trend", "kırılım", "karma")
 MAX_BRIEF = 400
 BRIEF_TOKENS = 800
-# Bars after the next open over which a sell, a hold or an untraded entry is judged.
+# Bars after the next open over which a sell, a hold or an untraded entry is judged:
+# two weeks of daily bars; about five trading days of hourly bars.
 HORIZON = 10
+HORIZONS = {"1h": 45}
+
+
+def horizon(interval: str) -> int:
+    """Return the bars over which outcomes are judged on ``interval``."""
+    return HORIZONS.get(interval, HORIZON)
+
+
 # Recent outcomes listed in each view.
 RECENT = 6
 # Lessons are rewritten once this many new outcomes are known.

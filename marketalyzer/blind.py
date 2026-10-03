@@ -46,10 +46,11 @@ from marketalyzer.services import (
     thin,
     today,
 )
+from openbb_bist.utils.constants import INTRADAY_LOOKBACK_DAYS
 
 MAX_DECISIONS = 800
 REVIEW_CHOICES = (0, 5, 10, 20)
-BLIND_INTERVALS = ("1d", "1W")
+BLIND_INTERVALS = ("1d", "1W", "1h")
 MODES = ("ai", "signals")
 # off: decide alone; journal: learn from resolved outcomes; rounds: also revise
 # the script between walk-forward windows.
@@ -98,6 +99,13 @@ class BlindConfig:
             raise ValueError("Turlar için öğrenme 'rounds' (günlük + turlar) olmalı.")
         if self.interval not in BLIND_INTERVALS:
             raise ValueError(f"Kör test zaman dilimi: {', '.join(BLIND_INTERVALS)}.")
+        limit = INTRADAY_LOOKBACK_DAYS.get(self.interval)
+        if limit and self.start < today() - timedelta(days=limit):
+            first = today() - timedelta(days=limit)
+            raise ValueError(
+                f"Saatlik veri yalnızca son {limit} gün için var; test başlangıcını"
+                f" {first.isoformat()} sonrasına alın. Eğitim de bu aralıktan alınır."
+            )
         if self.review_every not in REVIEW_CHOICES:
             raise ValueError("Gözden geçirme aralığı 0, 5, 10 ya da 20 bar olmalı.")
         if self.start >= self.end:
@@ -355,6 +363,7 @@ class Simulation:
             training=self.data.training,
             strategy=self.strategy,
             journal=journal,
+            interval=self.config.interval,
         )
         return view, result
 
@@ -500,7 +509,7 @@ class Learner:
     entry's outcome is the trade the signals-only run opened at the same
     next open (what was missed or avoided), known when that trade closed;
     without one, and for sells and holds, it is the move from the next open
-    over ``learn.HORIZON`` bars, known on that bar.
+    over ``horizon`` bars, known on that bar.
     """
 
     def __init__(
@@ -511,12 +520,14 @@ class Learner:
         coach: learn.Coach | None = None,
         strategy: dict[str, Any] | None = None,
         emit: Callable[[dict[str, Any]], None] = lambda event: None,
+        horizon: int = learn.HORIZON,
     ):
         self.journal = journal
         self.signals = {sim.data.code: sim for sim in signal_sims}
         self.coach = coach
         self.strategy = strategy
         self.emit = emit
+        self.horizon = horizon
         self._open: dict[int, learn.Entry] = {}
 
     def day(self, when: Any) -> dict[str, Any] | None:
@@ -589,12 +600,11 @@ class Learner:
                 )
         return None
 
-    @staticmethod
-    def _forward(sim: Simulation, i: int) -> tuple | None:
+    def _forward(self, sim: Simulation, i: int) -> tuple | None:
         frame = sim.data.frame
         if i + 1 >= len(frame):
             return None
-        j = min(i + 1 + learn.HORIZON, len(frame) - 1)
+        j = min(i + 1 + self.horizon, len(frame) - 1)
         start = float(frame["Open"].iloc[i + 1])
         if not start:
             return None
@@ -1214,7 +1224,13 @@ def run_blind(
         emit({"type": "plan", **plan})
         if config.learning != "off":
             letters = {d.code: research.letter(k) for k, d in enumerate(data)}
-            walk.learner = Learner(learn.Journal(letters), [], coach=coach, emit=emit)
+            walk.learner = Learner(
+                learn.Journal(letters),
+                [],
+                coach=coach,
+                emit=emit,
+                horizon=learn.horizon(config.interval),
+            )
     rows = walk.run(script, parts, allocation, revise)
     emit({"type": "stage", "stage": "summary", "message": "Sonuçlar hesaplanıyor"})
     signal_sims = list(walk.signals.values())
@@ -1490,6 +1506,7 @@ def decide_now(
             training={s["key"]: s for s in stats},
             strategy=strategy,
             journal=journal,
+            interval=interval,
         )
         decision = decider.decide(view)
         return {

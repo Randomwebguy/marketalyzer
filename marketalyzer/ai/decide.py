@@ -36,7 +36,12 @@ from marketalyzer.ai.openrouter import (
     list_models,
 )
 from marketalyzer.ai.settings import ai_home, private_dir
-from marketalyzer.research import SIGNAL_BY_KEY, active_signals, indicators
+from marketalyzer.research import (
+    BARS_PER_YEAR,
+    SIGNAL_BY_KEY,
+    active_signals,
+    indicators,
+)
 from marketalyzer.services import number
 
 MAX_TOKENS = 300
@@ -44,6 +49,7 @@ TEMPERATURE = 0.0
 TIMEOUT = (10.0, 45.0)
 RECENT_BARS = 20
 MAX_PLOTS = 6
+INTERVAL_NAMES = {"1d": "1 gün", "1W": "1 hafta", "1h": "1 saat"}
 # Round-trip trading cost the model should beat: commission, BSMV and slippage.
 ROUND_TRIP_COST_PCT = 0.5
 DEFAULT_PRESET = "claude-haiku"
@@ -263,6 +269,7 @@ def snapshot(
     training: dict[str, dict[str, Any]] | None = None,
     strategy: dict[str, Any] | None = None,
     journal: dict[str, Any] | None = None,
+    interval: str = "1d",
 ) -> dict[str, Any]:
     """Describe the last bar of ``frame`` without names, dates or price levels.
 
@@ -272,7 +279,8 @@ def snapshot(
     ``training`` each catalog signal's statistics from the training period.
     ``strategy`` adds the strategy's summary and track record
     (``strateji_ozeti``, ``strateji_gecmisi``); ``journal`` the resolved
-    outcomes and lessons known at this bar (``karar_gunlugu``).
+    outcomes and lessons known at this bar (``karar_gunlugu``). Bars other
+    than daily are named in ``zaman_dilimi`` (daily views stay unchanged).
     """
     ind = indicators(frame)
     c = ind["close"]
@@ -280,7 +288,7 @@ def snapshot(
     first = c[-RECENT_BARS] if len(c) >= RECENT_BARS else c[0]
     hist = ind["macd_hist"]
     width = ind["bb_upper"][-1] - ind["bb_lower"][-1]
-    window = c[-252:]
+    window = c[-BARS_PER_YEAR.get(interval, 252) :]
     volume20 = ind["volume20"][-1]
     obv = ind["obv"]
     view: dict[str, Any] = {
@@ -363,6 +371,8 @@ def snapshot(
     view["pozisyon"] = position or {"durum": "yok"}
     if journal:
         view["karar_gunlugu"] = journal
+    if interval != "1d":
+        view = {"zaman_dilimi": INTERVAL_NAMES.get(interval, interval), **view}
     return view
 
 

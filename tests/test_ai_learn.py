@@ -93,8 +93,42 @@ def test_views_carry_strategy_context_from_before_the_test():
     first = json.loads(short.views[0])
     assert first["strateji_ozeti"]["tur"] == "trend"
     assert first["strateji_gecmisi"]["islem"] > 0
+    assert "zaman_dilimi" not in first  # Daily views stay as they were.
     # The track record uses only bars before the test, so the end changes nothing.
     assert first["strateji_gecmisi"] == json.loads(long.views[0])["strateji_gecmisi"]
+
+
+def test_blind_test_runs_on_hourly_bars():
+    model = RuleModel()
+    today = services.today()
+    result = blind.run_blind(
+        config(
+            symbols=["THYAO"],
+            start=today - timedelta(days=40),
+            end=today - timedelta(days=5),
+            years=0.5,
+            interval="1h",
+            learning="journal",
+        ),
+        Decider("k", "m", complete=model),
+    )
+    view = json.loads(model.views[0])
+    assert view["zaman_dilimi"] == "1 saat"
+    assert result["audit"]["blind"] is True
+    times = [d["time"] for d in result["decisions"]]
+    assert times and any(t[11:16] not in ("", "00:00") for t in times)
+    # The journal judges sells and holds over about a week of hourly bars.
+    kinds = {d.get("outcome_kind") for d in result["decisions"]}
+    assert not any(k and k.startswith("10 bar") for k in kinds)
+
+
+def test_hourly_tests_must_fit_the_hourly_data():
+    today = services.today()
+    with pytest.raises(ValueError, match="Kör test zaman dilimi"):
+        config(interval="5m").check()
+    with pytest.raises(ValueError, match="Saatlik veri"):
+        config(interval="1h", start=today - timedelta(days=800)).check()
+    config(interval="1h", start=today - timedelta(days=300)).check()
 
 
 # --- Lockstep walk -----------------------------------------------------------------

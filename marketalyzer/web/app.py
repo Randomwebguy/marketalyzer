@@ -215,7 +215,7 @@ class BlindRequest(Costs):
     mode: Literal["ai", "signals"] = "ai"
     review_every: Literal[0, 5, 10, 20] = 0
     years: float = Field(2, ge=0.5, le=10)
-    interval: Literal["1d", "1W"] = "1d"
+    interval: Literal["1d", "1W", "1h"] = "1d"
     stop_loss_pct: float | None = Field(None, gt=0, lt=50)
     decision_model: str | None = Field(None, max_length=200)
     use_cache: bool = True

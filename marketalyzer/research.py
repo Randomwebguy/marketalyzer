@@ -32,7 +32,8 @@ MAX_SYMBOLS = 8
 MIN_EVENTS = 8
 MIN_BARS = 120
 STUDY_INTERVALS = ("1d", "1W", "1h")
-BARS_PER_YEAR = {"1d": 252, "1W": 52, "1h": 252 * 8}
+# BIST has nine hourly bars a day (09:30 to 17:30 and the 18:00 close).
+BARS_PER_YEAR = {"1d": 252, "1W": 52, "1h": 252 * 9}
 BENCHMARK = "XU100"
 WEEKDAYS = ("Pzt", "Sal", "Çar", "Per", "Cum")
 DEPTH_NOTE = (
