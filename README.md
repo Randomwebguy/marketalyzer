@@ -242,6 +242,14 @@ Web arayüzünde **Lab → AI Strateji** sayfası dört adımlı bir akış suna
 
 Kör test saatlik barlarda da çalışır (Yahoo saatlik veriyi son 729 gün için verir; eğitim ve test bu aralığa sığmalıdır). Aynı hisselerde saatlik barlar işlem sayısını 4-10 katına çıkarır ama işlem başına getiri maliyetin (gidiş-dönüş yaklaşık %0,5) altına iner: `supertrend_sik` 2025-04 → 2025-10'da günlükte %+9,3 · 20 işlem, saatlikte %+12,9 · 121 işlem; 2025-10 → 2026-10'da günlükte %+22,5 · 28 işlem, saatlikte %-5,0 · 268 işlem. Saatlikte standart `supertrend` (çarpan 3) daha iyidir (%+17,3 · 72 ve %+7,9 · 150 işlem).
 
+**Daha önce denenmemiş hisselerde son 3 ay (2026-07-03 → 2026-10-02, saatlik).** Bu dönemde piyasa düştü: XU100 %-15,1 değişti, kaybın büyük kısmı eylüldeydi (%-17).
+- **MGROS:** `supertrend_sik` sinyalleri %-6,5 · 13 işlem; yapay zeka ve karar günlüğüyle %-0,5 · 7 işlem; al-tut %-18,7.
+- **8 hisselik sepet** (ULKER, TAVHL, DOAS, CCOLA, AEFES, MAVI, CIMSA, TTKOM): sinyaller %-8,4 · 104 işlem; yapay zeka ve günlükle %-2,9 · 16 işlem, zamanın %6'sında piyasada; al-tut %-11,3.
+- **Diğer kütüphane scriptleri** saatlikte ve günlükte de kaybettirdi.
+- **Yapay zekanın farkı** çoğunlukla girişleri reddedip nakitte kalmasından geldi. Aldığı işlemlerin ortalaması da negatifti.
+- **Aynı sepette aylık rotasyon** (saatlik emirlerle, `autorotate.replay`): 6 ay ve en iyi 3 ile %-9,2, eşit ağırlıkla %-11,7, 9 ay ve en iyi 3 ile %-14,4.
+- **Rotasyon için bu süre kısa:** üç ayda yalnızca 3-4 karar var. XU100 filtresi ancak 1 Ekim kararında nakde geçti.
+
 Trendi yeniden girişlerle ya da sıkı stoplarla parçalamak işlem sayısını artırır ama maliyet ve testere zararıyla getiriyi düşürür; ortalama uzunlukları gibi parametrelerde bir yılın en iyisi diğer yılın en kötülerinden olabilir. Bu yüzden iki dönemde de tutarlı kalan hassas Supertrend seçildi. Ölçümler yükselen bir piyasaya aittir; düşen piyasada trend takibi daha az işlem ve farklı sonuç verir.
 
 **Öğrenen kör test.** Kör test formundaki **Öğrenme** seçeneği:
