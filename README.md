@@ -298,7 +298,25 @@ Genel göstergeler stratejiden ayrı adlandırılır (`supertrend_genel` çarpan
   - Sonnet ile Sharpe oranı üç dönemde de sinyallerin yaklaşık iki katı oldu.
   - Bedeli, düşen piyasada girişleri de almak: S'de kayıp sinyallere yakın ama al-tuttan ve XU100'den az.
   - Bu tasarımı 2019–2024/09 verisi destekliyor: o dönemde hiçbir giriş filtresi "hepsini al"ı geçemedi; yarım boyut eşiği de bu dönemden seçildi.
+- **Piyasa rejimi kuralı (denendi, bırakıldı):** 2019–2024/09 verisinde düşüş rejimlerinde gelen girişler bile ortalamada kazandırdı:
+  - XU100 50 günlük ortalamasının altındayken %+3,3, 200 günlük ortalamasının altındayken %+10,4.
+  - Girişleri atlamak toplamı belirgin düşürdü; yarım boyut risk başına getiriyi en fazla %3 iyileştirdi.
+  - Bu dönemin en iyi adayı "XU100 20 günde %−3'ten fazla düştüyse yarım boyut"tu. İstatistik filtresiyle %+15,5 / %+9,0 / %−8,9 verdi: kuralsız sürümden A'da 4, B'de 4,5 puan düşük, S'de yalnızca 1 puan iyi.
 - **Kanıt isabeti kapısı (denendi, bırakıldı):** benzer-sinyal kanıtını yalnızca son 30 sinyalde isabetliyse göstermek A'da kazancı yarıya indirdi, B'yi düzeltmedi (Sonnet: %+9,2 ve %+0,6). Kanıtın son isabeti sonraki isabetini öngörmüyor.
+
+**Ek veri kaynakları (2026-10-03 incelemesi).**
+
+- **Bilanço:**
+  - Yahoo yalnızca son 5 çeyreği ve 4 yılı veriyor. İş Yatırım'ın mali tablo servisi ise 2017'den beri çeyreklik tabloları veriyor. Bankalar ayrı formatta (UFRS_K).
+  - Tablolar dönem sonundan 75 gün (yıl sonunda 100 gün) sonra bilinir sayılırsa ileriye bakmadan kullanılabilir.
+  - 2019–2024/09'da 16 sanayi ve holding şirketinin `supertrend_sik` sinyallerinde kâr büyümesi, satış büyümesi, özkaynak kârlılığı, marj, borç/özkaynak, nakit kalitesi, kazanç getirisi ve defter/piyasa ile sinyal sonucu arasındaki sıra korelasyonları ±0,1'in altında kaldı ve çoğu yıldan yıla yön değiştirdi.
+  - Bilanço bu yüzden işlem başına karar için değil, aylık hisse seçiminde (momentum rotasyonuna değer/kalite eğilimi olarak) denenmeye daha uygun.
+  - 2023 sonundan beri enflasyon muhasebesi (TMS 29) uygulandığı için önceki ve sonraki tablolar doğrudan karşılaştırılamaz.
+- **Derinlik (emir defteri):** Yahoo vermiyor. Geçmiş kademe verisi ücretsiz değil; gerçek zamanlı derinlik Borsa İstanbul lisanslı veri dağıtıcılarından alınır. Kör testte yerine günlük TL hacmi, sıfır hacimli gün oranı ve Amihud likidite ölçüsü kullanılıyor.
+- **Haberler:**
+  - Borsa İstanbul için asıl kaynak KAP bildirimleri. Şirket listesi alınabiliyor ama geçmiş bildirim sorgusu zaman aşımına uğradı; Yahoo THYAO için haber döndürmedi.
+  - Haber metni hisseyi ve tarihi ele vereceği için kör teste ancak anonim olay özellikleri olarak girebilir: bedelsiz, geri alım, temettü, finansal rapor ya da özel durum açıklaması gibi.
+  - Metin olarak yalnızca canlı (sanal hesap) kararlarda kullanılabilir.
 
 **Geliştirmede Claude aboneliğiyle karar** (`marketalyzer/ai/claude_cli.py`): `claude_cli.decider()` (Haiku; `decider("claude-sonnet-5-5")` ile Sonnet) ve `claude_cli.coach()` (Sonnet), `blind.run_blind(config, decider, coach=coach)` ile kullanılır. Her istek `claude -p` ile çalışır:
 - araç, MCP, kayıtlı oturum ve düşünme kapalıdır;
