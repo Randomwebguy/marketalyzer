@@ -29,7 +29,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from marketalyzer import blind, research, services
+from marketalyzer import blind, research, rotation, services
 from marketalyzer.ai import decide, learn, runs
 from marketalyzer.ai.author import author_script
 from marketalyzer.ai.chat import ChatError, ChatRunner, resolve_model
@@ -241,6 +241,39 @@ class BlindRequest(Costs):
             stop_loss_pct=self.stop_loss_pct,
             learning=self.learning,
             rounds=self.rounds if self.learning == "rounds" else 1,
+        )
+
+
+class RotationRequest(Costs):
+    """A momentum rotation over a list of stocks."""
+
+    symbols: list[str] = Field(
+        default_factory=lambda: list(rotation.LARGE_CAPS),
+        min_length=2,
+        max_length=rotation.MAX_SYMBOLS,
+    )
+    start: date
+    end: date | None = None
+    lookback_months: int = Field(6, ge=3, le=12)
+    skip_months: int = Field(1, ge=0, le=2)
+    top: int = Field(5, ge=1, le=rotation.MAX_SYMBOLS)
+    absolute: bool = False
+    market: bool = False
+
+    def config(self) -> rotation.RotationConfig:
+        """Return the engine's config for this request."""
+        return rotation.RotationConfig(
+            symbols=self.symbols,
+            start=self.start,
+            end=self.end or services.today(),
+            lookback_months=self.lookback_months,
+            skip_months=self.skip_months,
+            top=self.top,
+            absolute=self.absolute,
+            market=self.market,
+            cash=self.cash,
+            costs=self.costs(),
+            slippage=self.slippage,
         )
 
 
@@ -981,6 +1014,14 @@ def create_app(
             return result
 
         return job_stream("blind", work)
+
+    @app.post("/api/lab/rotation")
+    async def lab_rotation(request: RotationRequest) -> dict[str, Any]:
+        config = request.config()
+        try:
+            return await asyncio.to_thread(rotation.run_rotation, config)
+        except ValueError as error:
+            raise _fail(error) from error
 
     @app.get("/api/lab/runs")
     def lab_runs() -> dict[str, Any]:

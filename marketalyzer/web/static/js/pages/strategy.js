@@ -26,7 +26,12 @@ const STAGES = {
   summary: "Sonuçlar hesaplanıyor",
 };
 // Results survive leaving the page; the module stays loaded.
-const memory = { study: null, author: null, blind: null, live: null, presets: null, scripts: null };
+const memory = { study: null, author: null, blind: null, live: null, rotation: null, presets: null, scripts: null };
+// Turkey's large caps, the rotation's default universe (with survivorship bias).
+const LARGE_CAPS = [
+  "AKBNK", "GARAN", "ISCTR", "YKBNK", "KCHOL", "SAHOL", "SISE", "EREGL", "FROTO", "TOASO",
+  "TCELL", "TUPRS", "THYAO", "BIMAS", "ASELS", "ENKAI", "PGSUS", "ARCLK", "PETKM", "KRDMD",
+];
 
 const num = (v, d = 2) => (Number.isFinite(v) ? fmtNumber(v, d) : "—");
 const pctCell = (v) => (Number.isFinite(v) ? `<span class="${tone(v)}-text">${esc(pctText(v))}</span>` : "—");
@@ -58,6 +63,7 @@ export function render(root) {
         <section class="card" data-author></section>
         <section class="card" data-blind></section>
         <section class="card" data-live></section>
+        <section class="card" data-rotation></section>
       </div>
     </div>`;
 
@@ -140,13 +146,14 @@ export function render(root) {
   function drawSteps() {
     const done = {
       study: Boolean(memory.study), author: Boolean(memory.author?.result), blind: Boolean(memory.blind?.result),
-      live: Boolean(memory.live),
+      live: Boolean(memory.live), rotation: Boolean(memory.rotation),
     };
     const steps = [
       ["study", "Sinyal araştırması", "Davranış, likidite, ~35 sinyalin geçmiş isabeti"],
       ["author", "Pine Script", "AI araştırmaya göre strateji yazar, doğrular, kaydeder"],
       ["blind", "Kör backtest", "Hızlı model her sinyali onaylar ya da reddeder"],
       ["live", "Canlı karar", "Bugünkü bar için AL/SAT kararı, sanal hesap"],
+      ["rotation", "Momentum rotasyonu", "Her ay en güçlü hisseleri tutar; bugünün seçimleri"],
     ];
     $("[data-steps]", root).innerHTML = `
       <div class="card-head"><h2>Akış</h2></div>
@@ -762,6 +769,116 @@ export function render(root) {
     }
   }
 
+  // ------------------------------------------------------------- momentum rotation
+
+  const rotationForm = {
+    symbols: store.get("strategy.rotation.symbols", LARGE_CAPS.join(", ")),
+    lookback: store.get("strategy.rotation.lookback", 6),
+    top: store.get("strategy.rotation.top", 5),
+    absolute: store.get("strategy.rotation.absolute", false),
+    market: store.get("strategy.rotation.market", false),
+  };
+
+  function drawRotation() {
+    const box = $("[data-rotation]", root);
+    const r = memory.rotation;
+    const option = (value, current, label) => `<option value="${value}" ${Number(current) === value ? "selected" : ""}>${label}</option>`;
+    box.innerHTML = `
+      <div class="card-head"><h2>5 · Momentum rotasyonu</h2><span class="sub">${esc(fmtDate(setup.start))} – ${esc(fmtDate(setup.end))}</span></div>
+      <p class="muted small" style="margin:0 0 12px">Her ayın son kapanışında hisseler son aylardaki getirilerine göre sıralanır; en güçlüler ertesi gün açılışta
+        alınır, listeden düşenler satılır. Hisseler arası göreli güç (momentum) BIST'te 2005'ten beri anlamlı bulunan bir etkidir. Sıralama yalnızca
+        o güne kadarki fiyatlarla yapılır; yapay zeka çağrısı yoktur.</p>
+      <form class="form" data-rotation-form>
+        <label class="field">Hisse listesi (virgülle, 2-30 hisse)<textarea name="symbols" rows="2" spellcheck="false">${esc(rotationForm.symbols)}</textarea>
+          <span class="hint">Varsayılan liste BIST'in 20 büyük şirketi. Bugünün büyüklerinden seçmek geçmiş sonuçları iyimser gösterir: dönem içinde endeksten düşenler listede yok.</span></label>
+        <div class="row">
+          <label class="field">Momentum ufku<select name="lookback">${[6, 9, 12].map((m) => option(m, rotationForm.lookback, `${m} ay (son ay hariç)`)).join("")}</select></label>
+          <label class="field">Tutulacak hisse<select name="top">${[3, 5, 7].map((n) => option(n, rotationForm.top, `${n} hisse`)).join("")}</select></label>
+        </div>
+        <label class="check"><input type="checkbox" name="absolute" ${rotationForm.absolute ? "checked" : ""}> Yalnızca 200 günlük ortalamasının üstündeki hisseleri al (değilse o pay nakitte kalır)</label>
+        <label class="check"><input type="checkbox" name="market" ${rotationForm.market ? "checked" : ""}> XU100 200 günlük ortalamasının altındayken tamamen nakde geç</label>
+        <div class="row-flex"><button class="btn primary" type="submit" data-rotation-run>${icon("play", "sm")} Rotasyonu test et</button></div>
+      </form>
+      <div data-rotation-result></div>`;
+    if (r) showRotation($("[data-rotation-result]", box), r);
+  }
+
+  function showRotation(host, r) {
+    const m = r.rotation;
+    const current = r.current;
+    host.innerHTML = `
+      <div class="tiles" style="margin-top:12px">
+        ${tile("Rotasyon getirisi", pctText(m.return_pct), { cls: `${tone(m.return_pct)}-text`, note: `Son ${fmtMoney(m.equity_final, 0)}` })}
+        ${tile("Eşit ağırlıklı al-tut", pctText(r.equal.return_pct), { note: `${r.config.symbols.length} hisse` })}
+        ${r.benchmark ? tile("XU100", pctText(r.benchmark.return_pct)) : ""}
+        ${tile("En büyük düşüş", pctText(m.max_drawdown_pct))}
+        ${tile("Sharpe", m.sharpe == null ? "—" : fmtNumber(m.sharpe, 2))}
+        ${tile("İşlem", String(m.trades), { note: m.win_rate_pct == null ? "" : `Kazançlı %${fmtNumber(m.win_rate_pct, 0)}` })}
+        ${tile("Ay", String(r.rebalances.length), { note: `Piyasada %${fmtNumber(m.exposure_pct ?? 0, 0)}` })}
+      </div>
+      <div class="card-head" style="margin-top:16px"><h3>Özsermaye</h3></div>
+      <div data-rotation-curve></div>
+      <h3 class="sub-title">Bu ay tutulacaklar <span class="muted small">(${esc(tipTime(current.as_of))} kapanışına göre, ertesi açılışta)</span></h3>
+      ${current.picks.length ? `<div class="table-wrap">${tableHtml([
+        { key: "symbol", label: "Hisse", html: (p) => `<b>${esc(p.symbol)}</b>` },
+        { key: "momentum_pct", label: "Momentum", num: true, html: (p) => pctCell(p.momentum_pct) },
+        { key: "above_200", label: "200 gün üstünde", format: (v) => (v ? "evet" : "hayır") },
+        { key: "act", label: "", html: (p) => `<button class="btn small" type="button" data-order="${esc(p.symbol)}">Emir fişi</button>` },
+      ], current.picks)}</div>` : `<p class="notice">${icon("alert", "sm")} Filtreler nedeniyle bu ay nakitte kalınıyor.</p>`}
+      <details class="more" style="margin-top:8px"><summary>Tüm sıralama (${current.ranking.length})</summary>
+        <div class="table-wrap">${tableHtml([
+          { key: "symbol", label: "Hisse" },
+          { key: "momentum_pct", label: "Momentum", num: true, html: (p) => pctCell(p.momentum_pct) },
+          { key: "above_200", label: "200 gün üstünde", format: (v) => (v ? "evet" : "hayır") },
+        ], current.ranking)}</div></details>
+      <details class="more" style="margin-top:8px"><summary>Ay ay değişimler (${r.rebalances.length})</summary>
+        <div class="table-wrap">${tableHtml([
+          { key: "decided", label: "Karar", format: (t) => fmtDate(t) },
+          { key: "executed", label: "Uygulama", format: (t) => fmtDate(t) },
+          { key: "picks", label: "Seçilenler", format: (v) => (v.length ? v.map((p) => p.symbol).join(", ") : "nakit") },
+          { key: "sold", label: "Satılan", format: (v) => (v.length ? v.join(", ") : "—") },
+          { key: "bought", label: "Alınan", format: (v) => (v.length ? v.join(", ") : "—") },
+        ], r.rebalances.slice().reverse())}</div></details>
+      <details class="more" style="margin-top:8px"><summary>İşlemler (${r.trades.length})</summary>
+        <div class="table-wrap">${tableHtml([
+          { key: "symbol", label: "Hisse" },
+          { key: "entry_time", label: "Giriş", format: tipTime },
+          { key: "exit_time", label: "Çıkış", format: tipTime },
+          { key: "qty", label: "Lot", num: true },
+          { key: "return_pct", label: "Getiri", num: true, html: (t) => pill(t.return_pct) },
+          { key: "exit_reason", label: "Neden" },
+        ], r.trades.slice().reverse())}</div></details>
+      <ul class="muted small" style="margin:10px 0 0 18px">${r.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>`;
+    const series = [
+      { name: "Rotasyon", color: token("--accent"), points: m.equity },
+      { name: "Eşit ağırlık", color: token("--series-2"), points: r.equal.equity },
+      r.benchmark && { name: "XU100", color: slotColor(3), points: r.benchmark.equity, dash: true },
+    ].filter(Boolean);
+    chartWithTable($("[data-rotation-curve]", host),
+      (slot) => lineChart(slot, { series, height: 240, format: (v) => fmtMoney(v, 0), label: "Rotasyon özsermayesi" }),
+      () => tableHtml([
+        { key: "t", label: "Tarih", format: tipTime },
+        ...series.map((s, k) => ({ key: `s${k}`, label: s.name, num: true, format: (v) => (v == null ? "—" : fmtMoney(v)) })),
+      ], series[0].points.map((p, i) => Object.fromEntries([["t", p.t], ...series.map((s, k) => [`s${k}`, s.points[i]?.v])])).slice(-120).reverse()));
+  }
+
+  async function runRotation(button) {
+    const symbols = rotationForm.symbols.split(/[\s,;]+/).map((s) => s.trim().toUpperCase()).filter(Boolean);
+    if (symbols.length < 2) return toast("En az 2 hisse girin.", "error");
+    busy(button, true, "Hesaplanıyor…");
+    try {
+      memory.rotation = await api("/api/lab/rotation", {
+        symbols, start: setup.start, end: setup.end, lookback_months: Number(rotationForm.lookback),
+        top: Number(rotationForm.top), absolute: rotationForm.absolute, market: rotationForm.market,
+      });
+      drawRotation();
+      drawSteps();
+    } catch (error) {
+      toast(error.message, "error");
+      busy(button, false);
+    }
+  }
+
   // ------------------------------------------------------------- events
 
   root.addEventListener("submit", (event) => {
@@ -771,7 +888,20 @@ export function render(root) {
     } else if (event.target.matches("[data-blind-form]")) {
       event.preventDefault();
       runBlind();
+    } else if (event.target.matches("[data-rotation-form]")) {
+      event.preventDefault();
+      runRotation($("[data-rotation-run]", event.target));
     }
+  });
+  root.addEventListener("input", (event) => {
+    if (!event.target.closest("[data-rotation-form]")) return;
+    const el = event.target;
+    if (el.name === "symbols") rotationForm.symbols = el.value;
+    if (el.name === "lookback") rotationForm.lookback = Number(el.value);
+    if (el.name === "top") rotationForm.top = Number(el.value);
+    if (el.name === "absolute") rotationForm.absolute = el.checked;
+    if (el.name === "market") rotationForm.market = el.checked;
+    for (const [key, value] of Object.entries(rotationForm)) store.set(`strategy.rotation.${key}`, value);
   });
   root.addEventListener("input", (event) => {
     const form = event.target.closest("[data-blind-form]");
@@ -831,6 +961,7 @@ export function render(root) {
   drawAuthor();
   drawBlind();
   drawLive();
+  drawRotation();
   loadOptions();
   return () => {
     authorAbort?.abort();

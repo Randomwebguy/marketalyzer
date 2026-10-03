@@ -265,6 +265,30 @@ Varsayılan **Ayarlar → Karar modeli** bölümünden değiştirilir; aynı yer
 
 Tahmin düğmesi testten önce en fazla kaç karar gerektiğini, modelin fiyatına göre yaklaşık maliyeti ve süreyi gösterir. Asistan da `signal_study` aracıyla aynı araştırmayı sohbette kullanabilir.
 
+## Momentum rotasyonu ve araştırma notları
+
+**AI Strateji → 5 · Momentum rotasyonu** (`marketalyzer/rotation.py`, `POST /api/lab/rotation`): her ayın son kapanışında hisse listesi (varsayılan: BIST'in 20 büyük şirketi) son 6, 9 ya da 12 aydaki getiriye göre sıralanır (son ay hariç); en güçlü 3, 5 ya da 7 hisse eşit paylarla ertesi gün açılışta alınır, listeden düşenler satılır, kalanlara dokunulmaz. Sıralama yalnızca karar kapanışına kadarki fiyatları kullanır; işlemler tam lot, BIST komisyonu, BSMV ve kaymayla yapılır. İsteğe bağlı filtreler: 200 günlük ortalamasının altındaki hisseyi almamak (o pay nakitte kalır) ve XU100 200 günlük ortalamasının altındayken tamamen nakde geçmek. Sonuçta eşit ağırlıklı al-tut ve XU100 ile karşılaştırma, ay ay değişimler ve bu ay tutulacak hisseler (emir fişiyle) gösterilir. Bugünün büyük şirketlerinden seçilen liste hayatta kalma yanlılığı taşır: dönem içinde endeksten düşenler yoktur.
+
+Neden bu yöntem: 2021-10 → 2026-09 arasındaki beş ayrı yılda, yapay zekasız ve aynı maliyetlerle yapılan ölçümler (araştırma düzeneğinde, aylık eşit ağırlığa dönerek):
+
+| 20 büyük hisse | Ortanca yıl | En kötü yıl | XU100'ü geçtiği yıl |
+|---|---|---|---|
+| Rotasyon, 6 ay momentum, en iyi 5 | %31,5 | %19,5 | 4/5 |
+| Rotasyon, 9 ay momentum, en iyi 5 | %57,5 | %19,5 | 4/5 |
+| Hisse bazında en iyi trend (çoklu ufuk) | %23,6 | %-0,8 | 1/5 |
+| `supertrend_sik` hisse bazında | %15,7 | %3,5 | 1/5 |
+
+Momentum ufku 6-9 ay ve tutulan hisse sayısı 3-7 arasında sonuç kararlıdır; 4 ay belirgin biçimde zayıftır. Hisse bazında trend stratejileri senin seçtiğin 5 güçlü hissede iyi görünürken 20 hissede zayıfladı: başarının önemli kısmı hisse seçiminden geliyordu. Hiçbir yöntem bu yıllarda TL bazında al-tutu düzenli geçemedi (2021-23'te XU100 %127 ve %146 yükseldi).
+
+Literatürden yararlanılanlar:
+
+- Hisseler arası momentum (geçmiş 6-12 ayın kazananlarını tutmak) en sağlam belgelenmiş etkilerden biridir; Borsa İstanbul'da 2005'ten beri anlamlı bir faktördür, 1990'larda ise tersine (contrarian) çalışmıştı ([Factor investing in the Turkish equity market](https://www.sciencedirect.com/science/article/pii/S2214845026001043), [Bildik & Gülay](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=302299)).
+- BIST100 endeksinin kendisinde (2000-2025, aylık) ekonomik olarak anlamlı zaman serisi momentumu bulunmamış, ortalamaya dönüş baskındır ([Trends in Business and Economics](https://dergipark.org.tr/en/pub/trendbusecon/article/1815580)); bu yüzden endeks zamanlaması isteğe bağlı bir filtre olarak bırakıldı.
+- Trend sinyallerinde tek bir ufuk yerine birkaç ufku birlikte kullanmak zamanlama belirsizliğine karşı sağlamlık verir ([Hurst, Ooi & Pedersen](https://www.trendfollowing.com/whitepaper/Century_Evidence_Trend_Following.pdf)); kütüphanedeki `coklu_trend` 20, 60 ve 200 günlük ortalamaların oylamasıdır.
+- Oynaklığa göre pozisyon küçültmek Sharpe oranını ve kuyruk riskini iyileştirir ([Moreira & Muir](https://www.nber.org/system/files/working_papers/w22208/w22208.pdf), [Harvey ve diğ.](https://people.duke.edu/~charvey/Research/Published_Papers/P135_The_impact_of.pdf)); zaman serisi momentumunun getirisinin önemli kısmı bu ölçeklemeden gelir ([Kim ve diğ.](https://www.researchgate.net/publication/303846490_Time_series_momentum_and_volatility_scaling)).
+- Çok sayıda varyant denenip en iyisi seçildiğinde sonuç şişer; az deneme ve komşu ayarlarda kararlılık aranmalıdır ([Deflated Sharpe Ratio](https://www.davidhbailey.com/dhbpapers/deflated-sharpe.pdf)).
+- Dil modelleri eğitim dönemlerindeki fiyatları ezberleyebilir; yapay zeka stratejilerinin çoğu gerçek test dışı veride al-tutu geçemiyor ([Look-ahead bias in LLM forecasts](https://arxiv.org/pdf/2512.23847)). Kör testteki hisse adı, tarih ve fiyat seviyesi gizleme bu yüzdendir.
+
 ## Web uygulaması ve Cloudflare tüneli
 
 Masaüstünde pencere çerçeveli, kenar çubuklu bir uygulama; telefonda alt sekme çubuğu ve alttan açılan sayfalarla yerel uygulama hissi veren bir arayüz. Kenar çubuğundaki **Piyasa / Lab** anahtarı iki çalışma alanı arasında geçiş yapar:

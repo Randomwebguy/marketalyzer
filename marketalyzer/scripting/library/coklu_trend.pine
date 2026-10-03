@@ -1,0 +1,17 @@
+//@version=5
+// Üç ufkun oylaması: fiyat 20, 60 ve 200 günlük ortalamanın en az ikisinin üstündeyse pozisyonda kal.
+// Tek bir ortalama uzunluğuna bağlı kalmadığı için parametre değişimine daha az duyarlıdır.
+strategy("Çoklu ufuk trend", overlay=true)
+
+short = input.int(20, "Kısa ortalama", minval=10, maxval=30, step=5)
+medium = input.int(60, "Orta ortalama", minval=40, maxval=100, step=10)
+long = input.int(200, "Uzun ortalama", minval=150, maxval=250, step=50)
+
+votes = (close > ta.sma(close, short) ? 1 : 0) + (close > ta.sma(close, medium) ? 1 : 0) + (close > ta.sma(close, long) ? 1 : 0)
+
+if ta.crossover(votes, 1.5)
+    strategy.entry("Al", strategy.long)
+if ta.crossunder(votes, 1.5)
+    strategy.close("Al")
+
+plot(ta.sma(close, long), "Uzun ortalama", color=color.orange)
