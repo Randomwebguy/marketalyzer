@@ -1,0 +1,17 @@
+//@version=5
+// Scalping: kısa vadeli aşırı satımda, ana trend yukarıyken al; kısa ortalamanın üstüne çıkınca ya da ATR stop'unda çık.
+strategy("Scalp RSI(2) dönüşü", overlay=true)
+rsiLength = input.int(2, "RSI periyodu", minval=2, maxval=4, step=1)
+entryLevel = input.int(10, "Giriş RSI", minval=5, maxval=20, step=5)
+trendLength = input.int(200, "Trend EMA", minval=100, maxval=300, step=100)
+exitLength = input.int(5, "Çıkış SMA", minval=3, maxval=10, step=1)
+stopAtr = input.float(1.5, "Stop ATR", minval=1.0, maxval=3.0, step=0.5)
+r = ta.rsi(close, rsiLength)
+trend = ta.ema(close, trendLength)
+exitLine = ta.sma(close, exitLength)
+atr = ta.atr(14)
+if r < entryLevel and close > trend
+    strategy.entry("Al", strategy.long)
+    strategy.exit("Stop", "Al", stop=close - stopAtr * atr)
+if close > exitLine
+    strategy.close("Al")

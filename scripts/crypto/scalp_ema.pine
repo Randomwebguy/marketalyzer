@@ -1,0 +1,17 @@
+//@version=5
+// Scalping: hızlı EMA yavaşı yukarı kesince, uzun trend yukarıyken al; ATR stop'u ve hedefiyle ya da ters kesişimde çık.
+strategy("Scalp EMA 9/21 + ATR", overlay=true)
+fastLength = input.int(9, "Hızlı EMA", minval=5, maxval=13, step=4)
+slowLength = input.int(21, "Yavaş EMA", minval=13, maxval=34, step=8)
+trendLength = input.int(100, "Trend EMA", minval=50, maxval=200, step=50)
+stopAtr = input.float(1.0, "Stop ATR", minval=0.5, maxval=2.0, step=0.5)
+targetAtr = input.float(2.0, "Hedef ATR", minval=1.0, maxval=4.0, step=1.0)
+fast = ta.ema(close, fastLength)
+slow = ta.ema(close, slowLength)
+trend = ta.ema(close, trendLength)
+atr = ta.atr(14)
+if ta.crossover(fast, slow) and close > trend
+    strategy.entry("Al", strategy.long)
+    strategy.exit("Çık", "Al", stop=close - stopAtr * atr, limit=close + targetAtr * atr)
+if ta.crossunder(fast, slow)
+    strategy.close("Al")

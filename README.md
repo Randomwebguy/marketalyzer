@@ -329,6 +329,37 @@ Genel göstergeler stratejiden ayrı adlandırılır (`supertrend_genel` çarpan
 - **Genel:** "hepsini al" ve çıkışta tutmak sistemi al-tuta yaklaştırıyor: yükselişte kazancı artırıyor, düşüşte kaybı. Sonnet düşen piyasalarda (kripto B, BIST S) bunu kurala göre daha iyi dengeledi.
 - **Uyarı:** sepetler bugünün büyüklerinden seçildi (hayatta kalma yanlılığı) ve dönemler kısa.
 
+**Kripto, yapay zekasız stratejiler** (`scripts/crypto/`, deney):
+
+Kütüphanedeki 8 strateji, istatistik filtresi ve momentum rotasyonu 15 büyük coinde (BTC, ETH, BNB, SOL, XRP, ADA, DOGE, TRX, AVAX, LINK, DOT, LTC, BCH, XLM, ATOM) takvim yılı pencerelerinde (2021 → 2026 Ekim) çalıştırıldı.
+- Maliyet: %0,1 komisyon ve %0,1 kayma.
+- Her yıl 100.000 $ ile başlanıp kazanç ertesi yıla taşındı.
+- Ayar ve filtreler yalnızca 2021–2023'te seçildi; 2024–2026 dokunulmadan sınandı.
+
+| 100.000 $ ile | 2021–23 (seçim) | 2024–26 (sınama) | 2021 → 2026 | En büyük düşüş |
+|---|---|---|---|---|
+| Eşit ağırlıklı al-tut | 546.657 $ | 116.585 $ | 637.322 $ | %−70 |
+| BTC | 139.067 $ | 186.695 $ | 259.630 $ | — |
+| supertrend_sik | 409.116 $ | 130.047 $ | 532.043 $ | %−44 |
+| **supertrend_sik + BTC 50 günlük filtresi** | 587.002 $ | **201.717 $** | 1.184.082 $ | **%−28** |
+| donchian + BTC 50 günlük filtresi | 400.643 $ | 136.961 $ | 548.725 $ | %−37 |
+| SMA kesişimi + BTC 50 günlük filtresi | 287.077 $ | 147.071 $ | 422.208 $ | %−42 |
+| Rotasyon 3 ay / en iyi 3 | 366.158 $ | 191.865 $ | 702.531 $ | %−80 |
+| **Rotasyon 3 ay / en iyi 3 + BTC 200 günlük filtresi** | 777.383 $ | **201.334 $** | 1.565.135 $ | %−45 |
+
+- **BTC filtresi işe yarayan geliştirme:**
+  - Trend stratejilerinde "BTC 50 günlük ortalamasının üstündeyse giriş, çıkış sinyalde" kuralı üç stratejinin üçünü de hem seçim hem sınama döneminde iyileştirdi.
+  - Rotasyonda BTC 200 günlük ortalamasının altında nakde geçmek 2022 çöküşünü atlattı.
+- **Çıkışta tutmak (BIST'teki "hepsini al" katmanı) kriptoda zarar verdi:** çöküşlerde pozisyon taşıdı, düşüş %−60 ile %−72'ye çıktı.
+- **Parametre ayarı** varsayılanlara göre küçük fark yarattı.
+- **Dönüş stratejileri** (RSI, Bollinger) günlükte zayıf kaldı.
+- **Saatlik barlar (2025-04 → 2026-10, 8 coin, 3 aylık pencereler):** bütün stratejiler kaybetti. En iyisi donchian kırılımı 82.613 $; al-tut 88.478 $, BTC 101.490 $.
+- **Scalping** (25 Ağustos – 2 Ekim 2026, 6 coin, 5 ve 15 dakikalık bar):
+  - Sonucu ücret belirledi. 5 dakikalık Bollinger dönüşü komisyonsuz 113.980 $, %0,02 ücretle 99.860 $, %0,1 ücretle 70.200 $ (1.322 işlem).
+  - İlk 20 günde ayarlanıp son 19 günde sınanan en iyi scalping, 15 dakikalık RSI dönüşüydü (26 işlem): %0,1 ücretle 105.750 $. Aynı dönemde al-tut 108.860 $.
+  - Hiçbir scalping stratejisi elde tutmayı geçemedi.
+- **Uyarı:** coinler bugünün büyüklerinden seçildi (2022'de çöken LUNA ve FTT gibi coinler listede yok); bu, al-tutu ve rotasyonu iyimser gösterir.
+
 **Ek veri kaynakları (2026-10-03 incelemesi).**
 
 - **Bilanço:**
