@@ -53,6 +53,8 @@ MAX_PLOTS = 6
 INTERVAL_NAMES = {"1d": "1 gün", "1W": "1 hafta", "1h": "1 saat"}
 # Round-trip trading cost the model should beat: commission, BSMV and slippage.
 ROUND_TRIP_COST_PCT = 0.5
+# Entries this far above the 200-day average (%) did poorly before the benchmarks.
+OVEREXTENDED_PCT = 35.0
 DEFAULT_PRESET = "claude-haiku"
 
 
@@ -174,10 +176,31 @@ Kurallar:
 - Gidiş-dönüş işlem maliyeti yaklaşık %{ROUND_TRIP_COST_PCT}.
 - Pozisyondayken kârı koru, zararı büyütme; ama tek bir zayıf barda panikle satma.
 - "guven": kararının doğru çıkma olasılığı (0-100).
+- "boyut" yalnızca AL için: varsayılan "tam". Hisse 200 günlük ortalamasının çok
+  üstündeyse ("sma200_uzaklik_%" {OVEREXTENDED_PCT:g}'ten büyük; geçmişte bu
+  girişler ortalamada zayıf kaldı) ya da kanıt girişe karşı ama reddetmeye
+  yetecek kadar güçlü değilse "yarım" yaz; yarım boyut riski ve getiriyi yarıya
+  indirir.
 - Yalnızca tek satır JSON yaz, başka hiçbir şey yazma:
-  {{"karar": "AL|SAT|BEKLE|TUT", "guven": 0-100, "gerekce": "en fazla 20 kelime"}}"""
+  {{"karar": "AL|SAT|BEKLE|TUT", "guven": 0-100, "boyut": "tam|yarım",
+  "gerekce": "en fazla 20 kelime"}}"""
 
 LABELS = {"buy": "AL", "sell": "SAT", "hold": "BEKLE", "keep": "TUT"}
+# Answers that ask for a half-size buy ("boyut"), with ı written as i.
+HALF = ("yarim", "0.5", "0,5", "half")
+
+
+def entry_size(view: dict[str, Any]) -> float:
+    """Return the size of a buy taken by rule: half when the stock is overextended.
+
+    In 2019-2024/09 the supertrend_sik entries of 20 large caps more than
+    ``OVEREXTENDED_PCT`` above their 200-day average averaged +0.5 % (38 %
+    winners) against +6.3 % for the rest, and lost on average in most years.
+    """
+    distance = (view.get("trend") or {}).get("sma200_uzaklik_%")
+    return 0.5 if distance is not None and distance > OVEREXTENDED_PCT else 1.0
+
+
 _ACTIONS = {"AL": "buy", "SAT": "sell", "BEKLE": "hold", "TUT": "hold"}
 
 
@@ -454,10 +477,21 @@ class Decision:
     cached: bool = False
     error: str | None = None
     model: str | None = None
+    size: float = 1.0  # share of the symbol's cash a buy uses: 1 or 0.5
 
     def to_dict(self) -> dict[str, Any]:
         """Return the decision as a JSON-friendly dict."""
         return asdict(self)
+
+
+def _salvage(text: str) -> dict[str, str] | None:
+    """Read the fields of an answer that is almost JSON (a stray quote, a comment)."""
+    found = {}
+    for key in ("karar", "guven", "boyut", "gerekce"):
+        hit = re.search(rf'"{key}"\s*:\s*"?([^",}}\n]*)', text)
+        if hit:
+            found[key] = hit.group(1).strip()
+    return found if found.get("karar") else None
 
 
 def parse_decision(text: str, holding: bool) -> Decision:
@@ -471,7 +505,9 @@ def parse_decision(text: str, holding: bool) -> Decision:
     try:
         data = json.loads(match.group(0))
     except ValueError as error:
-        raise ValueError("Yanıttaki JSON okunamadı.") from error
+        data = _salvage(match.group(0))
+        if data is None:
+            raise ValueError("Yanıttaki JSON okunamadı.") from error
     raw = str(data.get("karar") or data.get("decision") or "").strip().upper()
     raw = raw.replace("İ", "I")
     action = _ACTIONS.get(raw)
@@ -489,7 +525,9 @@ def parse_decision(text: str, holding: bool) -> Decision:
     except (TypeError, ValueError):
         confidence = None
     reason = " ".join(str(data.get("gerekce") or data.get("reason") or "").split())
-    return Decision(action, label, confidence, reason[:240])
+    said = str(data.get("boyut") or "").strip().lower().replace("ı", "i")
+    size = 0.5 if action == "buy" and said in HALF else 1.0
+    return Decision(action, label, confidence, reason[:240], size=size)
 
 
 class DecisionCache:

@@ -37,7 +37,9 @@ from marketalyzer.ai import author, evidence, learn
 from marketalyzer.ai.context import Context, load_context
 from marketalyzer.ai.decide import (
     Decider,
+    Decision,
     EvidenceDecider,
+    entry_size,
     position_view,
     script_view,
     snapshot,
@@ -60,6 +62,9 @@ MAX_DECISIONS = 800
 REVIEW_CHOICES = (0, 5, 10, 20)
 BLIND_INTERVALS = ("1d", "1W", "1h")
 MODES = ("ai", "signals", "stats")
+# ask: the decider judges entry signals too; take: every entry signal is bought
+# (half size when overextended) and the decider judges exits only.
+ENTRIES = ("ask", "take")
 RANDOM_DRAWS = 2000
 # off: decide alone; journal: learn from resolved outcomes; rounds: also revise
 # the script between walk-forward windows.
@@ -97,9 +102,10 @@ class BlindConfig:
     stop_loss_pct: float | None = None
     learning: str = "off"
     rounds: int = 1
+    entries: str = "ask"
 
-    def check(self) -> None:
-        """Raise ValueError (in Turkish) for settings that cannot run."""
+    def _check_deciding(self) -> None:
+        """Raise ValueError for who decides, how it learns and what it judges."""
         if self.mode not in MODES:
             raise ValueError("Karar modu 'ai', 'signals' ya da 'stats' olmalı.")
         if self.learning not in LEARNING:
@@ -108,10 +114,16 @@ class BlindConfig:
             raise ValueError(
                 "İstatistik filtresi öğrenme kullanmaz; öğrenmeyi kapatın."
             )
+        if self.entries not in ENTRIES:
+            raise ValueError("Giriş kararı 'ask' ya da 'take' olmalı.")
         if not 1 <= self.rounds <= MAX_ROUNDS:
             raise ValueError(f"Tur sayısı 1 ile {MAX_ROUNDS} arasında olmalı.")
         if self.rounds > 1 and self.learning != "rounds":
             raise ValueError("Turlar için öğrenme 'rounds' (günlük + turlar) olmalı.")
+
+    def check(self) -> None:
+        """Raise ValueError (in Turkish) for settings that cannot run."""
+        self._check_deciding()
         if self.interval not in BLIND_INTERVALS:
             raise ValueError(f"Kör test zaman dilimi: {', '.join(BLIND_INTERVALS)}.")
         limit = INTRADAY_LOOKBACK_DAYS.get(self.interval)
@@ -415,7 +427,9 @@ class Simulation:
         frame, account, config = self.data.frame, self.account, self.config
         price = float(frame["Open"].iloc[i]) * (1 + config.slippage / 2)
         per_share = price * (1 + config.costs.effective_rate)
-        qty = int(account.cash // per_share)
+        # A half-size buy leaves the other half of the symbol's cash idle.
+        size = float(note.get("size") or 1.0)
+        qty = int(account.cash * size // per_share)
         if qty <= 0:
             return
         fee = config.costs(qty, price)
@@ -449,6 +463,7 @@ class Simulation:
                 "bars": i - account.entry_bar,
                 "exit_reason": reason,
                 "confidence": account.entry_note.get("confidence"),
+                "size": account.entry_note.get("size", 1.0),
             }
         )
         self.trade_bars.append((account.entry_bar, i))
@@ -886,6 +901,15 @@ def _step_day(sims: list[Simulation], when: Any) -> list[tuple[Simulation, int, 
     return due
 
 
+def _taken(view: dict[str, Any]) -> Decision:
+    """Buy an entry signal by rule, without asking: half size when overextended."""
+    size = entry_size(view)
+    reason = "giriş sinyali kuralla alındı"
+    if size < 1:
+        reason += "; 200 günlük ortalamanın çok üstünde, yarım boyut"
+    return Decision("buy", "AL", reason=reason, model="kural", size=size)
+
+
 def _ask_day(
     pool: ThreadPoolExecutor,
     due: list[tuple[Simulation, int, str]],
@@ -898,7 +922,11 @@ def _ask_day(
     def ask(item: tuple[Simulation, int, str]) -> tuple[Any, Any]:
         sim, i, event = item
         view = sim.prepare(i, event, journal)
-        return view, (sim.decide(view) if view is not None else None)
+        if view is None:
+            return None, None
+        if event == "entry" and sim.config.entries == "take":
+            return view, _taken(view)
+        return view, sim.decide(view)
 
     for (sim, i, event), (view, decision) in zip(due, pool.map(ask, due)):
         if view is None:
@@ -1007,6 +1035,7 @@ def summarize(
             "symbols": [d.code for d in data],
             "script": config.script or "editör scripti",
             "mode": config.mode,
+            "entries": config.entries,
             "review_every": config.review_every,
             "interval": config.interval,
             "cash": config.cash,
@@ -1749,6 +1778,7 @@ def config_from(body: dict[str, Any]) -> BlindConfig:
         stop_loss_pct=body.get("stop_loss_pct") or None,
         learning=body.get("learning") or "off",
         rounds=int(body.get("rounds") or 1),
+        entries=body.get("entries") or "ask",
     )
 
 

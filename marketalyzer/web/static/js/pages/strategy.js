@@ -400,6 +400,7 @@ export function render(root) {
     learning: store.get("strategy.learning", "off"),
     rounds: store.get("strategy.rounds", 4),
     interval: store.get("strategy.interval", "1d"),
+    entries: store.get("strategy.entries", "take"),
   };
   let blindAbort = null;
   let blindJob = null;
@@ -452,6 +453,7 @@ export function render(root) {
       learning: blindForm.mode === "ai" ? blindForm.learning : "off",
       rounds: Number(blindForm.rounds) || 4,
       interval: blindForm.interval,
+      entries: blindForm.mode === "signals" ? "ask" : blindForm.entries,
     };
   }
 
@@ -486,7 +488,10 @@ export function render(root) {
         <div class="row">
           <label class="field">Zaman dilimi<select name="interval">${INTERVALS.map(([v, l]) => `<option value="${v}" ${blindForm.interval === v ? "selected" : ""}>${l}</option>`).join("")}</select>
             <span class="hint">${blindForm.interval === "1h" ? "Saatlik veri yalnızca son 2 yıl için var; eğitim ve test bu aralığa sığmalı. Karar sayısı ve maliyet günlüğün yaklaşık 9 katıdır." : "Karar her barın kapanışında verilir, emir sonraki barın açılışında gerçekleşir."}</span></label>
-          <span></span>
+          ${blindForm.mode === "signals" ? "<span></span>" : `<label class="field">Girişler<select name="entries">
+            <option value="ask" ${blindForm.entries === "ask" ? "selected" : ""}>Karar katmanı girişlere de karar versin</option>
+            <option value="take" ${blindForm.entries === "take" ? "selected" : ""}>Her giriş sinyalini al; yalnızca çıkışlara karar verilsin</option></select>
+            <span class="hint">2019–2024 verisinde giriş vetosu "hepsini al"ı geçemedi. "Hepsini al"da hisse 200 günlük ortalamasının %35'ten fazla üstündeyse yarım boyutla alınır.</span></label>`}
         </div>
         <div class="row">
           <label class="field">Zarar durdur % (isteğe bağlı)<input name="stop" type="number" min="0.5" max="49" step="0.5" value="${esc(blindForm.stop)}" placeholder="script belirler"></label>
@@ -736,6 +741,7 @@ export function render(root) {
           { key: "entry_price", label: "Giriş fiyatı", num: true, format: (v) => num(v) },
           { key: "exit_price", label: "Çıkış fiyatı", num: true, format: (v) => num(v) },
           { key: "return_pct", label: "Getiri", num: true, html: (t) => pill(t.return_pct) },
+          ...(ai ? [{ key: "size", label: "Boyut", format: (v) => (v === 0.5 ? "yarım" : "tam") }] : []),
           { key: "exit_reason", label: "Çıkış nedeni" },
         ], (ai ? r.trades : r.signal_trades).slice().reverse())}</div></details>`;
     const series = [
@@ -1019,6 +1025,7 @@ export function render(root) {
     if (el.name === "learning") blindForm.learning = el.value;
     if (el.name === "rounds") blindForm.rounds = Number(el.value);
     if (el.name === "interval") blindForm.interval = el.value;
+    if (el.name === "entries") blindForm.entries = el.value;
     for (const [key, value] of Object.entries(blindForm)) store.set(`strategy.${key}`, value);
     if (el.name === "learning" || el.name === "interval") {
       drawBlind();

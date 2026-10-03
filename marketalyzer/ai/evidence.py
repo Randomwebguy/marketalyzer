@@ -145,16 +145,19 @@ class Sample:
     code: str
 
 
+def _summary(returns: np.ndarray) -> dict[str, Any]:
+    if not len(returns):
+        return {"adet": 0}
+    return {
+        "adet": len(returns),
+        "kazancli_%": number(float((returns > 0).mean()) * 100, 1),
+        "ort_getiri_%": number(float(returns.mean()), 2),
+    }
+
+
 def stats(samples: list[Sample]) -> dict[str, Any]:
     """Count, share of winners and average return of ``samples``."""
-    if not samples:
-        return {"adet": 0}
-    returns = [s.pct for s in samples]
-    return {
-        "adet": len(samples),
-        "kazancli_%": number(sum(r > 0 for r in returns) / len(returns) * 100, 1),
-        "ort_getiri_%": number(sum(returns) / len(returns), 2),
-    }
+    return _summary(np.array([s.pct for s in samples], dtype=float))
 
 
 class Pool:
@@ -163,10 +166,24 @@ class Pool:
     def __init__(self, samples: list[Sample]):
         self.samples = sorted(samples, key=lambda s: s.known)
         self._known = [s.known for s in self.samples]
+        self._matrix = np.array(
+            [
+                [
+                    np.nan if s.readings.get(k) is None else s.readings[k]
+                    for k in FEATURES
+                ]
+                for s in self.samples
+            ],  # fmt: skip
+            dtype=float,
+        ).reshape(len(self.samples), len(FEATURES))
+        self._pcts = np.array([s.pct for s in self.samples], dtype=float)
+
+    def _count(self, now: Any) -> int:
+        return bisect.bisect_right(self._known, now)
 
     def known(self, now: Any) -> list[Sample]:
         """Return the samples whose trade closed by ``now``."""
-        return self.samples[: bisect.bisect_right(self._known, now)]
+        return self.samples[: self._count(now)]
 
     def similar(
         self, values: dict[str, float | None], now: Any
@@ -176,27 +193,25 @@ class Pool:
         Readings are compared in units of their spread; a reading a sample
         lacks counts as one unit apart. Too few known samples give None.
         """
-        known = self.known(now)
-        if len(known) < MIN_SAMPLES:
+        n = self._count(now)
+        if n < MIN_SAMPLES:
             return None
-        keys = [k for k in FEATURES if values.get(k) is not None]
-        if not keys:
+        columns = [j for j, k in enumerate(FEATURES) if values.get(k) is not None]
+        if not columns:
             return None
-        matrix = np.array(
-            [
-                [np.nan if s.readings.get(k) is None else s.readings[k] for k in keys]
-                for s in known
-            ]  # fmt: skip
-        )
+        matrix = self._matrix[:n, columns]
         spread = np.nanstd(matrix, axis=0)
         spread[~np.isfinite(spread) | (spread == 0)] = 1.0
-        target = np.array([values[k] for k in keys])
+        target = np.array([values[k] for k in FEATURES if values.get(k) is not None])
         gaps = np.abs(matrix - target) / spread
         gaps = np.where(np.isnan(gaps), 1.0, np.minimum(gaps, 4.0))
         distance = np.sqrt((gaps**2).mean(axis=1))
-        count = min(NEIGHBOURS, max(MIN_SAMPLES // 2, len(known) // 3))
-        nearest = [known[j] for j in np.argsort(distance, kind="stable")[:count]]
-        return {"benzer": stats(nearest), "tumu": stats(known)}
+        count = min(NEIGHBOURS, max(MIN_SAMPLES // 2, n // 3))
+        nearest = np.argsort(distance, kind="stable")[:count]
+        return {
+            "benzer": _summary(self._pcts[:n][nearest]),
+            "tumu": _summary(self._pcts[:n]),
+        }
 
 
 # --- Rules ------------------------------------------------------------------------

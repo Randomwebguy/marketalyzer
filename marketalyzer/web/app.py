@@ -223,6 +223,7 @@ class BlindRequest(Costs):
     use_cache: bool = True
     learning: Literal["off", "journal", "rounds"] = "off"
     rounds: int = Field(4, ge=1, le=blind.MAX_ROUNDS)
+    entries: Literal["ask", "take"] = "ask"
 
     def config(self) -> blind.BlindConfig:
         """Return the engine's config for this request."""
@@ -243,6 +244,7 @@ class BlindRequest(Costs):
             stop_loss_pct=self.stop_loss_pct,
             learning=self.learning,
             rounds=self.rounds if self.learning == "rounds" else 1,
+            entries=self.entries,
         )
 
 

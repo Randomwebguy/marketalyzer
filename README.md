@@ -284,13 +284,21 @@ Genel göstergeler stratejiden ayrı adlandırılır (`supertrend_genel` çarpan
 | Eski tasarım, Claude Sonnet 5.5 | %+10,3 | %+1,3 | %−2,2 |
 | Yeni tasarım, Claude Sonnet 5.5 | %+17,7 | %+0,2 | %−0,7 |
 | İstatistik filtresi | %+16,8 | %+2,0 | %−4,0 |
+| **Hepsini al + çıkış kararı, Sonnet 5.5** | %+12,9 | **%+15,2** | %−6,2 |
+| **Hepsini al + çıkış kararı, istatistik filtresi** | **%+19,7** | %+13,5 | %−9,9 |
 | Al-tut / XU100 | %+23,4 / %+24,5 | %+9,1 / %+10,7 | %−11,3 / %−15,1 |
 
 - **Tasarım:** aynı modelle yeni tasarım altı karşılaştırmanın beşinde öndeydi.
 - **A dönemi:** kazanç çoğunlukla çıkış sinyallerine rağmen tutmaktan geldi. Sonnet'in reddettiği 6 giriş, alınsaydı ortalama %−5,2 getirecekti.
-- **B dönemi:** benzer-sinyal kanıtı ters çalıştı. Kanıtın zararda gösterdiği 42 sinyal gerçekte ortalama %+5,7 kazandırdı. Bu yüzden kanıta dayanan bütün kollar sinyallerin gerisinde kaldı.
+- **B dönemi:** benzer-sinyal kanıtı ters çalıştı. Kanıtın zararda gösterdiği 42 sinyal gerçekte ortalama %+5,7 kazandırdı. Bu yüzden girişleri de eleyen bütün kollar sinyallerin gerisinde kaldı.
 - **S dönemi:** düşen piyasada az işlem yaparak kaybı küçülttüler.
-- **Al-tut:** yükselen iki yılda hiçbiri al-tutu geçemedi.
+- **Hepsini al (`entries: "take"`):** girişleri elemek yerine her giriş sinyali alındı. Hisse 200 günlük ortalamasının %35'ten fazla üstündeyse yarım boyut kullanıldı. Karar katmanı yalnızca çıkışlara karar verdi.
+  - Yalnızca bu kollar iki yükselen yılda da kazandırdı.
+  - B'de al-tutu ve XU100'ü geçtiler.
+  - Sonnet ile Sharpe oranı üç dönemde de sinyallerin yaklaşık iki katı oldu.
+  - Bedeli, düşen piyasada girişleri de almak: S'de kayıp sinyallere yakın ama al-tuttan ve XU100'den az.
+  - Bu tasarımı 2019–2024/09 verisi destekliyor: o dönemde hiçbir giriş filtresi "hepsini al"ı geçemedi; yarım boyut eşiği de bu dönemden seçildi.
+- **Kanıt isabeti kapısı (denendi, bırakıldı):** benzer-sinyal kanıtını yalnızca son 30 sinyalde isabetliyse göstermek A'da kazancı yarıya indirdi, B'yi düzeltmedi (Sonnet: %+9,2 ve %+0,6). Kanıtın son isabeti sonraki isabetini öngörmüyor.
 
 **Geliştirmede Claude aboneliğiyle karar** (`marketalyzer/ai/claude_cli.py`): `claude_cli.decider()` (Haiku; `decider("claude-sonnet-5-5")` ile Sonnet) ve `claude_cli.coach()` (Sonnet), `blind.run_blind(config, decider, coach=coach)` ile kullanılır. Her istek `claude -p` ile çalışır:
 - araç, MCP, kayıtlı oturum ve düşünme kapalıdır;

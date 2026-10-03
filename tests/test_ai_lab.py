@@ -794,3 +794,14 @@ def test_an_account_out_of_credit_stops_the_test_instead_of_holding():
         config(symbols=["THYAO"]), Decider("k", "m", complete=refused)
     )
     assert result["ai"]["errors"] == result["ai"]["decisions"] > 0
+
+
+def test_an_almost_json_answer_still_gives_its_decision():
+    stray = parse_decision(
+        '{"karar": "TUT", "guven": 70, "gerekce": "trend "güçlü""}', holding=True
+    )
+    assert stray.label == "TUT" and stray.confidence == 70
+    noted = parse_decision('{"karar": "AL", // not\n "boyut": "yarım"}', holding=False)
+    assert noted.action == "buy" and noted.size == 0.5
+    with pytest.raises(ValueError, match="okunamadı"):
+        parse_decision('{"guven": 50, oops}', holding=False)

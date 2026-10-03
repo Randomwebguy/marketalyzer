@@ -261,3 +261,68 @@ def test_a_test_ending_later_sees_the_same_evidence():
     assert shared > 0
     for a, b in zip(short["decisions"], long["decisions"][:shared]):
         assert a.get("evidence") == b.get("evidence") and a["action"] == b["action"]
+
+
+# --- Position size ------------------------------------------------------------------
+
+
+def test_a_half_size_buy_is_read_and_traded(monkeypatch):
+    from marketalyzer.ai import decide
+
+    half = decide.parse_decision('{"karar": "AL", "boyut": "Yarım"}', holding=False)
+    assert half.action == "buy" and half.size == 0.5
+    assert decide.parse_decision('{"karar": "AL"}', holding=False).size == 1.0
+    assert (
+        decide.parse_decision('{"karar": "SAT", "boyut": "yarım"}', holding=True).size
+        == 1.0
+    )
+
+    def model(*args, **kwargs):
+        messages = args[2]
+        if messages[0]["content"] == decide.SYSTEM:
+            view = json.loads(messages[1]["content"])
+            if view["pozisyon"]["durum"] == "var":
+                return {"text": '{"karar": "SAT"}', "model": "m", "usage": {"cost": 0}}
+            return {
+                "text": '{"karar": "AL", "boyut": "yarım"}',
+                "model": "m",
+                "usage": {"cost": 0},
+            }
+        return {
+            "text": '{"tur": "trend", "ozet": "x"}',
+            "model": "m",
+            "usage": {"cost": 0},
+        }
+
+    result = blind.run_blind(
+        config(symbols=["THYAO"]), Decider("k", "m", complete=model)
+    )
+    signal_qty = {t["entry_time"]: t["qty"] for t in result["signal_trades"]}
+    first = result["trades"][0]
+    assert first["size"] == 0.5
+    assert first["qty"] == pytest.approx(signal_qty[first["entry_time"]] / 2, abs=1)
+
+
+def test_take_mode_buys_every_entry_and_asks_only_about_exits():
+    from marketalyzer.ai import decide
+
+    assert decide.entry_size({"trend": {"sma200_uzaklik_%": 40.0}}) == 0.5
+    assert decide.entry_size({"trend": {"sma200_uzaklik_%": 10.0}}) == 1.0
+    assert decide.entry_size({}) == 1.0
+    with pytest.raises(ValueError, match="Giriş kararı"):
+        config(entries="maybe").check()
+    model = RuleModel()
+    result = blind.run_blind(
+        config(symbols=["THYAO"], entries="take"), Decider("k", "m", complete=model)
+    )
+    asked = [json.loads(v)["strateji"]["olay"] for v in model.views]
+    assert asked and set(asked) == {"çıkış"}
+    entries = [d for d in result["decisions"] if d["event"] == "giriş"]
+    assert entries and all(
+        d["label"] == "AL" and d["model"] == "kural" for d in entries
+    )
+    for d in entries:
+        over = (d["readings"].get("sma200_uzaklik") or 0) > decide.OVEREXTENDED_PCT
+        assert d["size"] == (0.5 if over else 1.0)
+    assert result["comparison"]["passed"]["count"] == 0
+    assert result["config"]["entries"] == "take"
