@@ -30,7 +30,7 @@ from typing import Any
 import pandas as pd
 
 from marketalyzer import services
-from marketalyzer.crypto import momentum
+from marketalyzer.crypto import live, momentum
 from marketalyzer.crypto.ledger import CryptoLedger
 from marketalyzer.paper.cli import default_home
 
@@ -130,10 +130,16 @@ def step(
     now: datetime | None = None,
     load: Loader | None = None,
     rule: momentum.Rule | None = None,
+    fetch: live.Fetch | None = None,
 ) -> dict[str, Any]:
-    """Process the finished days since the last step; return what was done."""
-    rule = rule or rule_of(ledger)
+    """Process the finished days since the last step; return what was done.
+
+    Accounts with a sizing plan run on Binance data (``live.step``).
+    """
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    if live.plan_of(ledger) is not None:
+        return live.step(ledger, now, fetch)
+    rule = rule or rule_of(ledger)
     today = now.date()
     finished = today - timedelta(days=1)
     last = date.fromisoformat(
@@ -166,14 +172,20 @@ def step(
 
 
 def step_all(
-    now: datetime | None = None, load: Loader | None = None
+    now: datetime | None = None,
+    load: Loader | None = None,
+    fetch: live.Fetch | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Step every account, downloading each coin's bars once."""
     load = cached(load)
+    fetch = live.memo(fetch or live.fetch_candles)
     out = {}
     for account in accounts():
         with CryptoLedger(ledger_path(account)) as ledger:
-            out[account] = step(ledger, now, load)
+            try:
+                out[account] = step(ledger, now, load, fetch=fetch)
+            except Exception as error:  # noqa: BLE001 - one account must not stop the rest
+                out[account] = {"error": f"{type(error).__name__}: {error}"}
     return out
 
 
@@ -223,6 +235,7 @@ def _record(report: dict[str, Any], fill: Any) -> None:
 
 def status(ledger: CryptoLedger) -> dict[str, Any]:
     """Return the account for the web page: value, positions, fills, curve."""
+    plan = live.plan_of(ledger)
     rule = rule_of(ledger)
     prices = ledger.get("prices", {})
     value = ledger.value(prices)
@@ -238,7 +251,11 @@ def status(ledger: CryptoLedger) -> dict[str, Any]:
     return {
         "exists": True,
         "account": ledger.path.stem,
-        "label": f"En güçlü {rule.top}",
+        "kind": "sized" if plan else "quarterly",
+        "label": plan.label() if plan else f"En güçlü {rule.top}",
+        "short": plan.short() if plan else f"En güçlü {rule.top}",
+        "plan": asdict(plan) if plan else None,
+        "targets": ledger.get("targets", {}),
         "initial": ledger.initial_cash,
         "cash": round(ledger.cash, 2),
         "value": round(value, 2),
@@ -265,13 +282,32 @@ def main(argv: list[str] | None = None) -> int:
         "--account", help="hesap adı (varsayılan: paper; step'te hepsi)"
     )
     parser.add_argument("--cash", type=float, default=100_000.0)
-    parser.add_argument("--top", type=int, default=5, help="tutulacak coin sayısı")
+    parser.add_argument("--top", type=int, help="tutulacak coin sayısı (çeyreklik: 5)")
+    parser.add_argument("--signal", choices=("supertrend", "donchian"),
+                        help="oynaklık boyutlu, Binance verili hesap")  # fmt: skip
+    parser.add_argument(
+        "--vol", type=float, default=0.25, help="portföy oynaklık hedefi"
+    )
+    parser.add_argument("--regime", action="store_true", help="BTC rejim katmanı")
+    parser.add_argument(
+        "--tranches", type=int, default=1, help="--top ile dilim sayısı"
+    )
     args = parser.parse_args(argv)
     if args.command == "init":
         account = args.account or MAIN
-        open_account(account, args.cash, args.top).close()
-        print(json.dumps({"created": str(ledger_path(account)), "cash": args.cash,
-                          "top": args.top}))  # fmt: skip
+        if args.signal:
+            plan = live.Plan(signal=args.signal, target_vol=args.vol, regime=args.regime,
+                             top=args.top, tranches=args.tranches)  # fmt: skip
+            live.open_account(ledger_path(account), plan, args.cash).close()
+            detail = asdict(plan)
+        else:
+            open_account(account, args.cash, args.top or 5).close()
+            detail = {"top": args.top or 5}
+        print(
+            json.dumps(
+                {"created": str(ledger_path(account)), "cash": args.cash, **detail}
+            )
+        )
         return 0
     if args.command == "step" and not args.account:
         if not accounts():

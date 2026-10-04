@@ -498,6 +498,83 @@ Denenen 96 ayarın hiçbiri test döneminde sabit kuralı geçemedi; ortanca 192
 
 Kaldıraç 2021-23 boğasında parayı katladı: en güçlü 5 ile 3x 5,7 M $ yaptı, spot 951 bin $. Ama her seviyede Sharpe düştü ve düşüş kaldıraçtan hızlı büyüdü. 10 Ekim 2025 çöküşünde 2x ve üstündeki hesaplarda LINK ve XLM pozisyonları tasfiye oldu. 5x'te 2021'de bile 16 tasfiye var. Fonlama %20 olunca her sonuç belirgin biçimde kötüleşiyor. Bu kuralda sabit kaldıraç riski ödülden hızlı artırıyor; 1,5x bile getiri başına daha fazla düşüş getiriyor.
 
+### Araştırma turu: geriye dönük seçilmemiş evren (2026-10-04)
+
+Plan `docs/superpowers/plans/2026-10-04-crypto-research-round.md` dosyasında. Literatür taramasının en önemli uyarısı şuydu: bugünün 15 büyük coinini geriye dönük seçmek, hayatta kalma yanlılığı yaratır. Eşit ağırlıklı ve kazananı kovalayan kurallarda bu yanlılık en büyüktür. Çöken coinler (LUNA, FTT) o dönem uygun olurdu, ama listede yoklar.
+
+**Veri:**
+
+- `marketalyzer/crypto/binance.py` Binance arşivindeki (data.binance.vision) 658 USDT çiftinin günlük mumlarını yerel önbelleğe indirir, kaldırılmış olanlar dahil. Henüz arşivlenmemiş günler REST'ten gelir. Anahtar gerekmez.
+- `marketalyzer/crypto/universe.py` her ay başında o tarihte görülebilen evreni kurar:
+  - En az 1 yıldır işlem gören ve 30 günlük ortanca hacmi en az 2 M $ olan coinlerden hacme göre ilk 20 alınır.
+  - Sabit, sarılı, fiat ve kaldıraçlı tokenler hariçtir.
+  - Bir haftadan uzun boşluğu olan sembol ayrı coin sayılır: eski LUNA ile LUNA 2.0 gibi.
+- 2019-2026 arasında evrene 127 coin girdi. Kaldırılan coin, son kapanışından satılmış sayılır.
+
+**Adaylar ve yargı yöntemi:**
+
+- Adaylar ve parametreleri önceden sabitlendi (`marketalyzer/crypto/strategies.py`, `scripts/crypto/pit_research.py`).
+- Seçim, 2020-23 Sharpe oranına göre yapıldı; test dönemi 2024 → 2026-10.
+- Maliyet: taraf başına %0,1 komisyon ve %0,05 kayma, ayrıca 2 kat stres.
+- İstatistik: deflated Sharpe (önceki turların ~150 denemesi dahil) ve CSCV ile aşırı uyum olasılığı (`marketalyzer/crypto/evaluate.py`).
+
+| 100 000 $'dan | 2020-23 | Düşüş | Sharpe | 2024-26 | Düşüş | Sharpe | 2024-26, maliyet ×2 |
+|---|---|---|---|---|---|---|---|
+| Sanal hesabın kuralı (en güçlü 5) | 464 200 $ | %-27 | 1,02 | 240 500 $ | %-42 | 0,82 | 231 100 $ |
+| En güçlü 3 | 276 400 $ | %-47 | 0,61 | 162 300 $ | %-46 | 0,42 | 156 100 $ |
+| A25: kural + oynaklık %25 | 240 700 $ | %-15 | 1,34 | 178 000 $ | %-26 | 0,99 | 170 400 $ |
+| A40: kural + oynaklık %40 | 410 200 $ | %-23 | 1,35 | 231 000 $ | %-39 | 0,92 | 216 200 $ |
+| B25: sıralamasız supertrend + %25 | 327 800 $ | %-31 | 1,36 | 156 300 $ | %-29 | 0,74 | 144 700 $ |
+| C25: Donchian topluluğu + %25 | 283 300 $ | %-38 | 0,96 | 110 000 $ | %-44 | 0,13 | 96 400 $ |
+| E25: Donchian + BTC rejimi + %25 | 284 200 $ | %-24 | 1,43 | 136 300 $ | %-24 | 0,61 | 128 500 $ |
+| F: haftalık 4 hafta momentum | 2 405 900 $ | %-53 | 1,13 | 100 300 $ | %-65 | 0,00 | 91 900 $ |
+| Evrende eşit ağırlık (aylık) | 366 200 $ | %-88 | 0,38 | 76 800 $ | %-71 | -0,15 | 75 800 $ |
+| BTC al-tut | 586 300 $ | %-77 | 0,64 | 200 400 $ | %-53 | 0,54 | 200 400 $ |
+
+**Bulgular:**
+
+- **Hayatta kalma yanlılığı büyüktü.** Sanal hesabın kuralı 2021-23'te dürüst evrende 332 700 $ yaptı; Yahoo'daki 15 coinlik listede 949 000 $ yapmıştı. "En güçlü 3"ün üstünlüğü tamamen bu yanlılıktan geliyordu. Dürüst evrende iki dönemde de en güçlü 5'in gerisinde kaldı.
+- **Zamanlama şansı çok büyük.** Çeyreklik seçimin başlangıcı 0-12 hafta kaydırılınca:
+  - 2024-26 parası 123 800 $ ile 378 900 $ arasında değişti.
+  - 2020-26 parası 324 100 $ ile 1,92 M $ arasında değişti.
+- **Dilimleme bu şansı daralttı** (`scripts/crypto/tranches.py`). Sermaye üç dilime bölünüp çeyrekleri birer ay arayla başlatılınca:
+  - 2024-26 aralığı 171 000-254 900 $'a indi.
+  - En büyük düşüş %-42'den yaklaşık %-33'e geriledi.
+  - Ortanca para aynı kaldı.
+- **Oynaklığa göre boyut iki dönemde de Sharpe'ı artırıp düşüşü azalttı:** A25 ve A40, kuralın kendisinden iyi. Getirisi ise daha düşük.
+- **Önceden belirlenen kuralla seçilen E25 testte geride kaldı.** Düşüşü yarıya indirdi (%-24'e karşı %-42), ama Sharpe'ı 0,61'e karşı 0,82.
+  - Deflated Sharpe 0,53 (önceki denemelerle 0,30) ve aşırı uyum olasılığı 0,49.
+  - Benimseme şartı (DSR ≥ 0,95) sağlanmadı; **hiçbir aday istatistik olarak kanıtlanmadı**.
+- **Fonlama kalabalığı katmanı benimsenmedi.** Eğitimde Sharpe'ı düşürdü (1,43'ten 1,36'ya); testte biraz iyi göründü.
+- **Literatürün eşleşen bulguları:** Donchian topluluğu ve haftalık momentum test döneminde zayıf kaldı. Bu, 2020 sonrası kesitsel momentumun zayıfladığını gösteren çalışmalarla uyumlu.
+
+**Uygulanan:** iki aday sanal hesapta ileriye dönük teste alındı (`marketalyzer/crypto/live.py`). Sanal hesap gerçek para içermez ve geleceğe dönük, tamamen test dışı veri üretir. Çalışan iki hesap karşılaştırma için sürüyor.
+
+- **Gelişmiş (`gelismis`):**
+  - Binance'teki o anki evren, çeyreklik en güçlü 5.
+  - Üç dilim, çeyrekleri birer ay arayla başlar.
+  - Supertrend ve BTC filtresi.
+  - Oynaklık hedefi %40, toplam pozisyon en fazla 1x.
+  - Dürüst testte en tutarlı çıkan iki iyileştirmeyi birleştirir.
+- **Donchian (`donchian`):** önceden belirlenen kuralla seçilen aday, Donchian topluluğu + BTC rejimi + oynaklık %25.
+
+```bash
+marketalyzer-crypto init --account gelismis --signal supertrend --top 5 --tranches 3 --vol 0.4
+marketalyzer-crypto init --account donchian --signal donchian --regime --vol 0.25
+```
+
+Bu hesaplar her ayın ilk kapanmış gününde evreni Binance'ten yeniden kurar. Her gün hedef ağırlıkları hesaplar ve hedefinden %25'ten fazla sapan pozisyonu dengeler.
+
+**Uygulanmayanlar ve nedenleri** (araştırma raporuna göre):
+
+- Korku ve açgözlülük endeksi: getiriyi izliyor, öncü değil.
+- LSTM, Transformer ve gradyan artırma: kazanç küçük coinlerden geliyor, maliyet sonrası kalmıyor.
+- Carry getirisi: 2025'te negatife döndü.
+- Haftalık geri dönüş: yalnızca küçük coinlerde var.
+- Yarılanma döngüsü: 4 olay, kanıt çelişkili.
+- BTC hakimiyeti, haftanın günü etkileri.
+- 1x üstü kaldıraç: kendi testimizde Sharpe'ı düşürdü.
+
 ## Web uygulaması ve Cloudflare tüneli
 
 Masaüstünde pencere çerçeveli, kenar çubuklu bir uygulama; telefonda alt sekme çubuğu ve alttan açılan sayfalarla yerel uygulama hissi veren bir arayüz. Kenar çubuğundaki **Piyasa / Lab** anahtarı iki çalışma alanı arasında geçiş yapar:

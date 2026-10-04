@@ -817,21 +817,40 @@ export function render(root) {
 
   const fmtUsd = (value, digits = 0) =>
     new Intl.NumberFormat("tr-TR", { style: "currency", currency: "USD", minimumFractionDigits: digits, maximumFractionDigits: digits }).format(value);
-  const coin = (symbol) => symbol.replace(/-USD$/, "");
+  const coin = (symbol) => symbol.replace(/(-USD|USDT)$/, "");
 
   const cryptoColor = (k) => [token("--accent"), token("--series-2"), slotColor(2), slotColor(3)][k % 4];
+
+  function cryptoRuleText(c) {
+    if (c?.kind === "sized") {
+      const p = c.plan;
+      const signal = p.signal === "donchian"
+        ? "Her coinde 5 ile 360 gün arası 9 ufukta Donchian kanalı kırılımı oylanır; sinyal, uzun olan ufukların payıdır."
+        : p.top
+          ? `Her çeyrek başında evrendeki coinler son 90 günlük getiriye göre sıralanır, en güçlü ${p.top}'i seçilir${p.tranches > 1 ? `; sermaye ${p.tranches} dilime bölünür ve dilimlerin çeyrekleri birer ay arayla başlar (yeniden dengeleme tarihinin şansını azaltır)` : ""}.
+             Seçilen coin supertrend (çarpan 2, ATR 10) yukarı dönünce ve BTC 50 günlük ortalamasının üstündeyken alınır; aşağı dönünce ya da seçimden düşünce satılır.`
+          : "Evrendeki her coin supertrend (çarpan 2, ATR 10) yukarı dönünce ve BTC 50 günlük ortalamasının üstündeyken alınır, aşağı dönünce satılır.";
+      return `Her ay Binance'te son 30 günün ortanca işlem hacmine göre ilk ${p.size} coin evreni oluşturur (en az 1 yıldır işlem gören; sabit, sarılı ve kaldıraçlı tokenler hariç).
+        ${signal} Pozisyonlar oynaklığın tersiyle boyutlanır ve portföyün beklenen yıllık oynaklığı %${Math.round(p.target_vol * 100)} hedefine ölçeklenir; toplam pozisyon en fazla 1x.
+        ${p.regime ? "BTC'nin 20/50/100/200 günlük ortalamalarından kaçının üstünde olduğuna göre toplam pozisyon küçülür. " : ""}Hedefinden %${Math.round(p.relative * 100)}'ten fazla sapan pozisyon dengelenir.
+        Günler UTC'ye göre kapanır; VPS her saat kontrol eder. Komisyon %0,1, kayma %0,1.
+        <b>İleriye dönük test hesabı:</b> geçmiş testte ana kurala göre düşüşü azalttı, ama üstünlüğü istatistik olarak kanıtlanmadı (README, "Araştırma turu").`;
+    }
+    const top = c?.rule?.top ?? 5;
+    return `Her çeyrek başında 15 büyük coin son 90 günlük getiriye göre sıralanır, en güçlü ${top}'i seçilir. Seçilen coinde
+      supertrend (çarpan 2, ATR 10) yukarı dönünce ve BTC 50 günlük ortalamasının üstündeyken özsermayenin 1/${top}'iyle alınır; supertrend aşağı dönünce ya da
+      coin seçimden düşünce satılır. Günler UTC'ye göre kapanır; VPS her saat kontrol eder. Komisyon %0,1, kayma %0,1.`;
+  }
 
   function drawCrypto() {
     const box = $("[data-crypto]", root);
     const all = memory.crypto;
     const list = all?.accounts || [];
     const c = list.find((a) => a.account === memory.cryptoAccount) || list[0];
-    const top = c?.rule?.top ?? 5;
+    const sized = c?.kind === "sized";
     const head = `<div class="card-head"><h2>6 · Kripto sanal hesap (7/24)</h2><span class="sub">USD · kesirli miktar · yapay zekasız kural</span>
       <span class="spacer"></span>${all?.exists ? `<button class="btn small" type="button" data-crypto-step>${icon("refresh", "sm")} Şimdi kontrol et</button>` : ""}</div>
-      <p class="muted small" style="margin:0 0 10px">Her çeyrek başında 15 büyük coin son 90 günlük getiriye göre sıralanır, en güçlü ${top}'i seçilir. Seçilen coinde
-        supertrend (çarpan 2, ATR 10) yukarı dönünce ve BTC 50 günlük ortalamasının üstündeyken özsermayenin 1/${top}'iyle alınır; supertrend aşağı dönünce ya da
-        coin seçimden düşünce satılır. Günler UTC'ye göre kapanır; VPS her saat kontrol eder. Komisyon %0,1, kayma %0,1.</p>`;
+      <p class="muted small" style="margin:0 0 10px">${c ? `<b>${esc(c.label)}.</b> ` : ""}${cryptoRuleText(c)}</p>`;
     if (!all) {
       box.innerHTML = `${head}<p class="muted small">Yükleniyor…</p>`;
       return;
@@ -841,7 +860,7 @@ export function render(root) {
       return;
     }
     const switcher = list.length > 1 ? `<div class="segmented" data-crypto-accounts style="margin-bottom:10px">${list.map((a) =>
-      `<button type="button" data-crypto-account="${esc(a.account)}" class="${a === c ? "active" : ""}">${esc(a.label)}${a.account === "paper" ? " (ana)" : ""} · ${pctText(a.return_pct)}</button>`).join("")}</div>` : "";
+      `<button type="button" data-crypto-account="${esc(a.account)}" class="${a === c ? "active" : ""}" title="${esc(a.label)}">${esc(a.short || a.label)}${a.account === "paper" ? " (ana)" : ""} · ${pctText(a.return_pct)}</button>`).join("")}</div>` : "";
     box.innerHTML = `${head}${switcher}
       <div class="tiles">
         ${tile("Başlangıç", fmtUsd(c.initial), { note: `${fmtDate(c.created)}` })}
@@ -850,7 +869,7 @@ export function render(root) {
         ${tile("Son işlenen gün", c.last_day ? fmtDate(c.last_day) : "—", { note: c.quarter ? `Çeyrek ${fmtDate(c.quarter)}` : "" })}
       </div>
       <div class="summary-rows" style="margin-top:10px">
-        <div><span>Bu çeyreğin seçimi</span><b>${c.selection.length ? c.selection.map((s) => `<span class="chip tag">${esc(coin(s))}</span>`).join(" ") : "—"}</b></div>
+        <div><span>${sized ? "Bu ayın evreni" : "Bu çeyreğin seçimi"}</span><b>${c.selection.length ? c.selection.map((s) => `<span class="chip tag">${esc(coin(s))}</span>`).join(" ") : "—"}</b></div>
       </div>
       ${c.positions.length ? `<h3 class="sub-title">Pozisyonlar</h3><div class="table-wrap">${tableHtml([
         { key: "symbol", label: "Coin", html: (p) => `<b>${esc(coin(p.symbol))}</b>` },
@@ -858,8 +877,14 @@ export function render(root) {
         { key: "avg_cost", label: "Ort. maliyet", num: true, format: (v) => fmtUsd(v, 4) },
         { key: "price", label: "Fiyat", num: true, format: (v) => fmtUsd(v, 4) },
         { key: "value", label: "Değer", num: true, format: (v) => fmtUsd(v) },
+        ...(sized ? [
+          { key: "share", label: "Pay", num: true, format: (v, p) => `%${fmtNumber((p.value / c.value) * 100, 1)}` },
+          { key: "target", label: "Hedef", num: true, format: (v, p) => `%${fmtNumber((c.targets[p.symbol] || 0) * 100, 1)}` },
+        ] : []),
         { key: "pnl_pct", label: "Kâr", num: true, html: (p) => pill(p.pnl_pct) },
-      ], c.positions)}</div>` : `<p class="muted small" style="margin-top:10px">Açık pozisyon yok: seçilen coinlerde yeni bir supertrend dönüşü bekleniyor.</p>`}
+      ], c.positions)}</div>` : `<p class="muted small" style="margin-top:10px">${sized
+        ? "Açık pozisyon yok: hedef ağırlıkların hepsi sıfır (sinyal yok ya da BTC filtresi kapalı)."
+        : "Açık pozisyon yok: seçilen coinlerde yeni bir supertrend dönüşü bekleniyor."}</p>`}
       <div data-crypto-curve style="margin-top:12px"></div>
       <details class="more" style="margin-top:8px"><summary>Son işlemler (${c.fills.length})</summary>
         <div class="table-wrap">${tableHtml([
@@ -875,7 +900,7 @@ export function render(root) {
     const curves = list.filter((a) => a.equity.length > 1);
     if (curves.length) {
       lineChart($("[data-crypto-curve]", box), {
-        series: curves.map((a) => ({ name: a.label, color: cryptoColor(list.indexOf(a)), points: a.equity })),
+        series: curves.map((a) => ({ name: a.short || a.label, color: cryptoColor(list.indexOf(a)), points: a.equity })),
         height: 200, format: (v) => fmtUsd(v), label: "Kripto sanal hesapların özsermayesi",
       });
     }

@@ -180,34 +180,42 @@ class Book:
 
 
 def simulate(
-    closes: pd.DataFrame, targets: np.ndarray, band: float = np.inf, first: int = 0
+    closes: pd.DataFrame,
+    targets: np.ndarray,
+    band: float = np.inf,
+    first: int = 0,
+    relative: float = 0.0,
+    fee: float = FEE,
+    slippage: float = SLIPPAGE,
 ) -> Book:
     """Trade toward ``targets`` on each close from row ``first``, with costs.
 
     A coin is sold out when its target is zero and bought when it is not held
     and its target is not; otherwise it is traded back to its target only when
-    it is more than ``band`` away. Sells come first; buys are capped at cash.
+    it is more than ``band`` plus ``relative`` times the target away. Sells
+    come first; buys are capped at cash.
     """
     prices = closes.to_numpy(dtype=float)
     rows, n = prices.shape
     units, cash, traded = np.zeros(n), 1.0, 0.0
     values = np.ones(rows)
     weights = np.zeros((rows, n))
-    buy_cost = (1 + SLIPPAGE / 2) * (1 + FEE)
-    sell_keep = (1 - SLIPPAGE / 2) * (1 - FEE)
+    buy_cost = (1 + slippage / 2) * (1 + fee)
+    sell_keep = (1 - slippage / 2) * (1 - fee)
     for t in range(first, rows):
         price = np.nan_to_num(prices[t], nan=0.0)
         live = price > 0
         value = cash + float(units @ price)
         held = units * price / value
         goal = np.where(live, targets[t], 0.0)
-        out = live & (units > 0) & ((goal == 0) | (held - goal > band))
+        slack = band + relative * goal
+        out = live & (units > 0) & ((goal == 0) | (held - goal > slack))
         for i in np.flatnonzero(out):
             sold = units[i] if goal[i] == 0 else (held[i] - goal[i]) * value / price[i]
             cash += sold * price[i] * sell_keep
             traded += sold * price[i]
             units[i] -= sold
-        into = live & (goal > 0) & ((units == 0) | (goal - held > band))
+        into = live & (goal > 0) & ((units == 0) | (goal - held > slack))
         for i in np.flatnonzero(into):
             spend = min((goal[i] - held[i]) * value, cash)
             if spend <= 0:

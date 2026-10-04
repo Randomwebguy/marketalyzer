@@ -203,25 +203,37 @@ class CryptoLedger:
         symbol: str,
         price: float,
         *,
+        units: float | None = None,
         now: datetime | None = None,
         reason: str = "",
     ) -> Fill | None:
-        """Sell the whole position in ``symbol``; None when there is none."""
+        """Sell ``units`` of ``symbol`` (all of it by default); None when none is held."""
         if price <= 0:
             raise ValueError("Fiyat pozitif olmalı.")
         filled = price * (1 - self.slippage / 2)
         self._db.execute("BEGIN IMMEDIATE")
         try:
             held = self.positions().get(symbol)
-            if held is None:
+            if held is None or (units is not None and units <= 0):
                 self._db.execute("ROLLBACK")
                 return None
-            fee = held.units * filled * self.fee
-            proceeds = held.units * filled - fee
-            pnl = proceeds - held.units * held.avg_cost
-            self._db.execute("DELETE FROM positions WHERE symbol = ?", (symbol,))
+            sold = (
+                held.units
+                if units is None or units >= held.units * (1 - 1e-9)
+                else units
+            )
+            fee = sold * filled * self.fee
+            proceeds = sold * filled - fee
+            pnl = proceeds - sold * held.avg_cost
+            if sold == held.units:
+                self._db.execute("DELETE FROM positions WHERE symbol = ?", (symbol,))
+            else:
+                self._db.execute(
+                    "UPDATE positions SET units = ? WHERE symbol = ?",
+                    (held.units - sold, symbol),
+                )
             self._set_cash(self.cash + proceeds)
-            fill = Fill(_now(now), symbol, "sell", held.units, filled, fee, pnl, reason)
+            fill = Fill(_now(now), symbol, "sell", sold, filled, fee, pnl, reason)
             self._insert(fill)
             self._db.execute("COMMIT")
         except Exception:

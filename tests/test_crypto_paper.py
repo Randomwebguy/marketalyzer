@@ -76,6 +76,20 @@ def test_the_ledger_buys_fractions_and_charges_fee_and_slippage(ledger):
     )
 
 
+def test_the_ledger_sells_part_of_a_position(ledger):
+    bought = ledger.buy("SOL-USD", 10_000, 100.0, now=NOW)
+    part = ledger.sell("SOL-USD", 110.0, units=bought.units / 4, now=NOW)
+    left = ledger.positions()["SOL-USD"]
+    assert left.units == pytest.approx(bought.units * 0.75)
+    assert left.avg_cost == pytest.approx(10_000 / bought.units)  # unchanged
+    assert part.pnl == pytest.approx(
+        part.units * (110 * 0.9995 * 0.999 - left.avg_cost)
+    )
+    rest = ledger.sell("SOL-USD", 110.0, units=10**9, now=NOW)  # more than held: all
+    assert rest.units == pytest.approx(left.units) and not ledger.positions()
+    assert ledger.sell("SOL-USD", 110.0, units=1.0) is None
+
+
 def test_a_second_ledger_cannot_overwrite_the_first(tmp_path, ledger):
     with pytest.raises(FileExistsError):
         CryptoLedger.create(ledger.path)

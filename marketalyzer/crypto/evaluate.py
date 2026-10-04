@@ -9,6 +9,7 @@ ratios spread and how skewed and fat-tailed its returns are.
 from __future__ import annotations
 
 import math
+from itertools import combinations
 from statistics import NormalDist
 
 import numpy as np
@@ -72,3 +73,38 @@ def deflated_sharpe(returns: np.ndarray, trial_sharpes: np.ndarray) -> float:
         return 0.0
     z = (observed - expected) * math.sqrt(n - 1) / math.sqrt(denominator)
     return normal.cdf(z)
+
+
+def overfit_probability(returns: np.ndarray, blocks: int = 16) -> float:
+    """Return the probability of backtest overfitting (Bailey et al., CSCV).
+
+    ``returns`` holds one column of per-bar returns per candidate. The rows
+    are cut into ``blocks`` pieces; for every way of picking half of them as
+    the training sample, the candidate with the best training Sharpe is
+    ranked among all candidates on the other half. The result is how often it
+    lands in the bottom half.
+    """
+    returns = np.asarray(returns, dtype=float)
+    rows, count = returns.shape
+    size = rows // blocks
+    cut = returns[: size * blocks].reshape(blocks, size, count)
+    sums, squares = cut.sum(axis=1), (cut**2).sum(axis=1)
+    below = 0
+    total = 0
+    for chosen in combinations(range(blocks), blocks // 2):
+        inside = np.zeros(blocks, dtype=bool)
+        inside[list(chosen)] = True
+        best = int(np.argmax(_sharpes(sums[inside], squares[inside], size)))
+        outside = _sharpes(sums[~inside], squares[~inside], size)
+        rank = (outside < outside[best]).sum() + 1  # 1 = worst
+        omega = rank / (count + 1)
+        below += np.log(omega / (1 - omega)) <= 0
+        total += 1
+    return below / total
+
+
+def _sharpes(sums: np.ndarray, squares: np.ndarray, size: int) -> np.ndarray:
+    n = sums.shape[0] * size
+    mean = sums.sum(axis=0) / n
+    var = np.maximum(squares.sum(axis=0) / n - mean**2, 1e-18)
+    return mean / np.sqrt(var)
