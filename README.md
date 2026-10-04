@@ -595,7 +595,29 @@ Bu deney kullanıcının isteğiyle kuruldu ve risk alarak kazanmayı hedefliyor
 | Long | 993 $ (%-90) | 1 186 | %39 | 4 527 $ | 366 / 129 |
 | Short | 2 050 $ (%-80) | 871 | %34 | 4 012 $ | 241 / 112 |
 
-Kayıpların büyük kısmı komisyondan geliyor. Kaldıraç komisyonu da katlıyor: 1 ATR'lik bir 15 dakikalık stop çoğu zaman %0,1-0,3 kadar dar, gidiş-dönüş maliyet ise pozisyonun %0,14'ü. Martingale beklenen değeri değiştirmez; birçok küçük kazancı seyrek büyük kayıplara çevirir. Deney bu yüzden ayarlar değiştirilmeden, kullanıcının istediği gibi canlı izlenmek için çalıştırılıyor.
+**Komisyon doğrulaması** (işlem işlem):
+
+- Her işlemin komisyonu pozisyon değerinin %0,100'ü (ortanca): girişte %0,05, çıkışta %0,05. Bu, Binance vadeli taker oranıdır.
+- Uçlar %0,088 ve %0,104; fark, çıkıştaki fiyatın girişten farklı olmasından geliyor.
+- İşlemlerin komisyon toplamı hesabın toplamıyla aynı.
+- Ortalama pozisyon değeri long'da 3 819 $, ortalama marjin 822 $ (ortalama ~4,6x). İşlemlerin yaklaşık üçte biri 8x ya da 10x'te açıldı.
+
+Long hesabın 9 007 $'lık kaybının dökümü:
+
+- Komisyon: 4 527 $ (yaklaşık yarısı).
+- Kayma: 1 812 $.
+- Fonlama: 52 $.
+- Fiyat hareketi: 2 616 $. Yani strateji maliyetler hariç de zarar etti: maliyet öncesi kazanan işlem oranı %39.
+
+Short hesabın 7 985 $'lık kaybı:
+
+- Komisyon: 3 945 $.
+- Kayma: 1 577 $.
+- Fiyat hareketi: 2 504 $.
+
+Zarar durduran işlemlerde fiyat ortanca %0,74 (long) ve %0,51 (short) hareket etti. Gidiş-dönüş maliyet %0,14 olduğundan, maliyet tek bir stop mesafesinin beşte biri ile dörtte biri arasında. Ama ~20 işlem/gün ve martingalenin büyüttüğü pozisyonlar bu maliyeti birikerek eritiyor.
+
+Martingale beklenen değeri değiştirmez; birçok küçük kazancı seyrek büyük kayıplara çevirir. Deney bu yüzden ayarlar değiştirilmeden, kullanıcının istediği gibi canlı izlenmek için çalıştırılıyor.
 
 ```bash
 marketalyzer-leverage init       # iki hesabı 10 000 $ ile açar
