@@ -619,6 +619,22 @@ Zarar durduran işlemlerde fiyat ortanca %0,74 (long) ve %0,51 (short) hareket e
 
 Martingale beklenen değeri değiştirmez; birçok küçük kazancı seyrek büyük kayıplara çevirir. Deney bu yüzden ayarlar değiştirilmeden, kullanıcının istediği gibi canlı izlenmek için çalıştırılıyor.
 
+**Skor çalışması** (`scripts/crypto/score_study.py`, 2026-10-04):
+
+- 10 kontratta son 180 günün her 15 dakikalık kapanışından iki yönde de işlem simüle edildi (345 240 işlem).
+- **Skorun öngörü gücü yok.** Her skor diliminde isabet %38-41, işlem başına net getiri %-0,13 ile %-0,17 arası.
+  - 80 üstü skorlar, 30 altındakilerden daha iyi değil.
+  - Başa baş için isabet %49 olmalı. 1,5'e 1 kâr/zarar oranında rastgele girişler de zaten ~%40 isabet verir.
+- **Hiçbir bileşen ve aday sinyal net getiriyle anlamlı ilişki göstermedi** (sıra korelasyonu 0,025'ten küçük). Denenen adaylar:
+  - 1 saat, 4 saat ve 24 saat momentum.
+  - Taker alım/satım akışı.
+  - BTC'nin 1 ve 4 saatlik hareketi.
+  - Oynaklık oranı.
+- **Oynaklık için çıkan -0,18 korelasyon ölçüm etkisi.** Oynaklık yüksekken kazanç da kayıp da büyür ve işlemlerin %60'ı kayıptır.
+- **Veriden öğrenilen skor da işe yaramadı.** Lojistik regresyon ilk 120 güne kuruldu, son 60 günde sınandı. Altı karşılaştırmanın beşinde başa başın altında kaldı; tek artı sonuç (short, en iyi %1, net %+0,14) çoklu denemede gürültü düzeyinde.
+
+**Sonuç:** 15 dakikalık bu teknik göstergelerde, bu çıkış kurallarıyla maliyeti karşılayacak bir üstünlük yok. Ağırlıkları elle değiştirmek bunu düzeltmez, geçmişe uydurur.
+
 ```bash
 marketalyzer-leverage init       # iki hesabı 10 000 $ ile açar
 marketalyzer-leverage step       # bir dakikalık adım (VPS'te her dakika)
