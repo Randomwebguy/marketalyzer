@@ -50,6 +50,8 @@ from marketalyzer.ai.openrouter import (
 )
 from marketalyzer.ai.settings import load_settings, public_settings, save_settings
 from marketalyzer.backtest.costs import BistCosts
+from marketalyzer.crypto import runner as crypto_runner
+from marketalyzer.crypto.ledger import CryptoLedger
 from marketalyzer.paper import autorotate
 from marketalyzer.paper.account import OrderRejected, PaperAccount
 from marketalyzer.paper.cli import account_path
@@ -1042,6 +1044,26 @@ def create_app(
             return await asyncio.to_thread(rotation.run_rotation, config)
         except ValueError as error:
             raise _fail(error) from error
+
+    @app.get("/api/crypto")
+    def crypto_account() -> dict[str, Any]:
+        path = crypto_runner.ledger_path()
+        if not path.exists():
+            return {"exists": False}
+        with CryptoLedger(path) as ledger:
+            return crypto_runner.status(ledger)
+
+    @app.post("/api/crypto/step")
+    async def crypto_step() -> dict[str, Any]:
+        path = crypto_runner.ledger_path()
+        if not path.exists():
+            raise HTTPException(404, "Kripto sanal hesabı yok.")
+
+        def work() -> dict[str, Any]:
+            with CryptoLedger(path) as ledger:
+                return crypto_runner.step(ledger)
+
+        return await asyncio.to_thread(work)
 
     def rotation_state() -> dict[str, Any]:
         plan = autorotate.load_plan(account_name)

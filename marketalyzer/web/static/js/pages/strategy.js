@@ -29,7 +29,7 @@ const MODES = [["ai", "AI + sinyaller"], ["stats", "İstatistik filtresi"], ["si
 // Who decided in a result: the model or the statistics filter.
 const decider = (r) => (r.config?.mode === "stats" ? "İstatistik filtresi" : "Yapay zeka");
 // Results survive leaving the page; the module stays loaded.
-const memory = { study: null, author: null, blind: null, live: null, rotation: null, auto: null, presets: null, scripts: null };
+const memory = { study: null, author: null, blind: null, live: null, rotation: null, auto: null, crypto: null, presets: null, scripts: null };
 // Turkey's large caps, the rotation's default universe (with survivorship bias).
 const LARGE_CAPS = [
   "AKBNK", "GARAN", "ISCTR", "YKBNK", "KCHOL", "SAHOL", "SISE", "EREGL", "FROTO", "TOASO",
@@ -67,6 +67,7 @@ export function render(root) {
         <section class="card" data-blind></section>
         <section class="card" data-live></section>
         <section class="card" data-rotation></section>
+        <section class="card" data-crypto></section>
       </div>
     </div>`;
 
@@ -812,6 +813,82 @@ export function render(root) {
     market: store.get("strategy.rotation.market", false),
   };
 
+  // ------------------------------------------------------------- crypto paper account
+
+  const fmtUsd = (value, digits = 0) =>
+    new Intl.NumberFormat("tr-TR", { style: "currency", currency: "USD", minimumFractionDigits: digits, maximumFractionDigits: digits }).format(value);
+  const coin = (symbol) => symbol.replace(/-USD$/, "");
+
+  function drawCrypto() {
+    const box = $("[data-crypto]", root);
+    const c = memory.crypto;
+    const head = `<div class="card-head"><h2>6 · Kripto sanal hesap (7/24)</h2><span class="sub">USD · kesirli miktar · yapay zekasız kural</span>
+      <span class="spacer"></span>${c?.exists ? `<button class="btn small" type="button" data-crypto-step>${icon("refresh", "sm")} Şimdi kontrol et</button>` : ""}</div>
+      <p class="muted small" style="margin:0 0 10px">Her çeyrek başında 15 büyük coin son 90 günlük getiriye göre sıralanır, en güçlü 5'i seçilir. Seçilen coinde
+        supertrend (çarpan 2, ATR 10) yukarı dönünce ve BTC 50 günlük ortalamasının üstündeyken özsermayenin 1/5'iyle alınır; supertrend aşağı dönünce ya da
+        coin seçimden düşünce satılır. Günler UTC'ye göre kapanır; VPS her saat kontrol eder. Komisyon %0,1, kayma %0,1.</p>`;
+    if (!c) {
+      box.innerHTML = `${head}<p class="muted small">Yükleniyor…</p>`;
+      return;
+    }
+    if (!c.exists) {
+      box.innerHTML = `${head}<p class="notice">${icon("alert", "sm")} Kripto sanal hesabı henüz açılmadı (sunucuda <code>marketalyzer-crypto init</code>).</p>`;
+      return;
+    }
+    box.innerHTML = `${head}
+      <div class="tiles">
+        ${tile("Başlangıç", fmtUsd(c.initial), { note: `${fmtDate(c.created)}` })}
+        ${tile("Şimdi", fmtUsd(c.value), { cls: `${tone(c.return_pct)}-text`, note: pctText(c.return_pct) })}
+        ${tile("Nakit", fmtUsd(c.cash), { note: `${c.positions.length} pozisyon` })}
+        ${tile("Son işlenen gün", c.last_day ? fmtDate(c.last_day) : "—", { note: c.quarter ? `Çeyrek ${fmtDate(c.quarter)}` : "" })}
+      </div>
+      <div class="summary-rows" style="margin-top:10px">
+        <div><span>Bu çeyreğin seçimi</span><b>${c.selection.length ? c.selection.map((s) => `<span class="chip tag">${esc(coin(s))}</span>`).join(" ") : "—"}</b></div>
+      </div>
+      ${c.positions.length ? `<h3 class="sub-title">Pozisyonlar</h3><div class="table-wrap">${tableHtml([
+        { key: "symbol", label: "Coin", html: (p) => `<b>${esc(coin(p.symbol))}</b>` },
+        { key: "units", label: "Miktar", num: true, format: (v) => fmtNumber(v, 6) },
+        { key: "avg_cost", label: "Ort. maliyet", num: true, format: (v) => fmtUsd(v, 4) },
+        { key: "price", label: "Fiyat", num: true, format: (v) => fmtUsd(v, 4) },
+        { key: "value", label: "Değer", num: true, format: (v) => fmtUsd(v) },
+        { key: "pnl_pct", label: "Kâr", num: true, html: (p) => pill(p.pnl_pct) },
+      ], c.positions)}</div>` : `<p class="muted small" style="margin-top:10px">Açık pozisyon yok: seçilen coinlerde yeni bir supertrend dönüşü bekleniyor.</p>`}
+      <div data-crypto-curve style="margin-top:12px"></div>
+      <details class="more" style="margin-top:8px"><summary>Son işlemler (${c.fills.length})</summary>
+        <div class="table-wrap">${tableHtml([
+          { key: "time", label: "Zaman", format: tipTime },
+          { key: "symbol", label: "Coin", format: coin },
+          { key: "side", label: "Yön", html: (f) => decisionChip(f.side === "buy" ? "AL" : "SAT") },
+          { key: "units", label: "Miktar", num: true, format: (v) => fmtNumber(v, 6) },
+          { key: "price", label: "Fiyat", num: true, format: (v) => fmtUsd(v, 4) },
+          { key: "fee", label: "Komisyon", num: true, format: (v) => fmtUsd(v, 2) },
+          { key: "pnl", label: "Kâr/zarar", num: true, format: (v) => (v == null ? "—" : fmtUsd(v, 2)) },
+          { key: "reason", label: "Neden" },
+        ], c.fills)}</div></details>`;
+    if (c.equity.length > 1) {
+      lineChart($("[data-crypto-curve]", box), {
+        series: [{ name: "Kripto sanal hesap", color: token("--accent"), points: c.equity }],
+        height: 200, format: (v) => fmtUsd(v), label: "Kripto sanal hesap özsermayesi",
+      });
+    }
+  }
+
+  async function loadCrypto() {
+    memory.crypto = await api("/api/crypto").catch(() => ({ exists: false }));
+    drawCrypto();
+  }
+
+  async function cryptoStep(button) {
+    busy(button, true, "Kontrol ediliyor…");
+    try {
+      const report = await api("/api/crypto/step", {});
+      toast(report.fills?.length ? `${report.fills.length} işlem yapıldı.` : report.days?.length ? "Gün işlendi; yeni işlem yok." : "İşlenecek yeni gün yok; değer güncellendi.");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+    await loadCrypto();
+  }
+
   function drawRotation() {
     const box = $("[data-rotation]", root);
     const r = memory.rotation;
@@ -1065,6 +1142,8 @@ export function render(root) {
       const button = event.target.closest(`[data-auto-${kind}]`);
       if (button) return autoAction(button, kind);
     }
+    const cryptoButton = event.target.closest("[data-crypto-step]");
+    if (cryptoButton) return cryptoStep(cryptoButton);
     const order = event.target.closest("[data-order]");
     if (order) emit("order", order.dataset.order);
   });
@@ -1077,6 +1156,8 @@ export function render(root) {
   drawLive();
   drawRotation();
   loadAuto();
+  drawCrypto();
+  loadCrypto();
   loadOptions();
   return () => {
     authorAbort?.abort();

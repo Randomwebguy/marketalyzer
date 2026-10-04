@@ -18,6 +18,7 @@ marketalyzer-backtest = "marketalyzer.backtest.cli:main"
 marketalyzer-paper = "marketalyzer.paper.cli:main"
 marketalyzer-web = "marketalyzer.web.cli:main"
 marketalyzer-rotation = "marketalyzer.paper.autorotate:main"
+marketalyzer-crypto = "marketalyzer.crypto.runner:main"
 marketalyzer-netlify = "marketalyzer.web.netlify:main"
 
 [dependency-groups]
@@ -54,6 +55,7 @@ ignore = [
 "marketalyzer/*/cli.py" = ["T20"]
 "marketalyzer/web/netlify.py" = ["T20"]
 "marketalyzer/paper/autorotate.py" = ["T20"]
+"marketalyzer/crypto/runner.py" = ["T20"]
 # The parser and interpreter dispatch on node types in long if-chains.
 "marketalyzer/scripting/{parser,runtime}.py" = ["PLR0911", "PLR0912"]
 "**/__init__.py" = ["F401"]

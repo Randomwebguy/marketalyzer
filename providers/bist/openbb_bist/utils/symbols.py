@@ -8,7 +8,8 @@ from openbb_bist.utils.constants import SYMBOL_ALIASES, YAHOO_SUFFIX
 def to_yahoo_symbol(symbol: str) -> str:
     """Convert a BIST code such as THYAO, THYAO.E or BIST100 to a Yahoo ticker.
 
-    Tickers that already carry a Yahoo suffix (".IS", "=X", ...) pass through.
+    Tickers that already carry a Yahoo suffix (".IS", "=X", ...) pass through,
+    and so do crypto pairs such as BTC-USD: BIST codes never contain a dash.
     """
     code = symbol.strip().upper().removeprefix("^").replace(" ", "")
     if not code:
@@ -16,7 +17,7 @@ def to_yahoo_symbol(symbol: str) -> str:
     code = SYMBOL_ALIASES.get(code, code)
     if code.endswith(".E"):
         code = code.removesuffix(".E")
-    if code.endswith(YAHOO_SUFFIX) or "." in code or "=" in code:
+    if code.endswith(YAHOO_SUFFIX) or "." in code or "=" in code or "-" in code:
         return code
     return code + YAHOO_SUFFIX
 

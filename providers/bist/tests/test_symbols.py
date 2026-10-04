@@ -21,6 +21,7 @@ from openbb_bist.utils.symbols import (
         ("BIST100", "XU100.IS"),
         ("bist 30", "XU030.IS"),
         ("USDTRY=X", "USDTRY=X"),
+        ("btc-usd", "BTC-USD"),
     ],
 )
 def test_to_yahoo_symbol(symbol, expected):
