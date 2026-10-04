@@ -1046,24 +1046,18 @@ def create_app(
             raise _fail(error) from error
 
     @app.get("/api/crypto")
-    def crypto_account() -> dict[str, Any]:
-        path = crypto_runner.ledger_path()
-        if not path.exists():
-            return {"exists": False}
-        with CryptoLedger(path) as ledger:
-            return crypto_runner.status(ledger)
+    def crypto_accounts() -> dict[str, Any]:
+        found = []
+        for account in crypto_runner.accounts():
+            with CryptoLedger(crypto_runner.ledger_path(account)) as ledger:
+                found.append(crypto_runner.status(ledger))
+        return {"exists": bool(found), "accounts": found}
 
     @app.post("/api/crypto/step")
     async def crypto_step() -> dict[str, Any]:
-        path = crypto_runner.ledger_path()
-        if not path.exists():
+        if not crypto_runner.accounts():
             raise HTTPException(404, "Kripto sanal hesabı yok.")
-
-        def work() -> dict[str, Any]:
-            with CryptoLedger(path) as ledger:
-                return crypto_runner.step(ledger)
-
-        return await asyncio.to_thread(work)
+        return await asyncio.to_thread(crypto_runner.step_all)
 
     def rotation_state() -> dict[str, Any]:
         plan = autorotate.load_plan(account_name)

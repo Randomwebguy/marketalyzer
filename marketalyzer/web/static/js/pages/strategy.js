@@ -29,7 +29,7 @@ const MODES = [["ai", "AI + sinyaller"], ["stats", "İstatistik filtresi"], ["si
 // Who decided in a result: the model or the statistics filter.
 const decider = (r) => (r.config?.mode === "stats" ? "İstatistik filtresi" : "Yapay zeka");
 // Results survive leaving the page; the module stays loaded.
-const memory = { study: null, author: null, blind: null, live: null, rotation: null, auto: null, crypto: null, presets: null, scripts: null };
+const memory = { study: null, author: null, blind: null, live: null, rotation: null, auto: null, crypto: null, cryptoAccount: null, presets: null, scripts: null };
 // Turkey's large caps, the rotation's default universe (with survivorship bias).
 const LARGE_CAPS = [
   "AKBNK", "GARAN", "ISCTR", "YKBNK", "KCHOL", "SAHOL", "SISE", "EREGL", "FROTO", "TOASO",
@@ -819,23 +819,30 @@ export function render(root) {
     new Intl.NumberFormat("tr-TR", { style: "currency", currency: "USD", minimumFractionDigits: digits, maximumFractionDigits: digits }).format(value);
   const coin = (symbol) => symbol.replace(/-USD$/, "");
 
+  const cryptoColor = (k) => [token("--accent"), token("--series-2"), slotColor(2), slotColor(3)][k % 4];
+
   function drawCrypto() {
     const box = $("[data-crypto]", root);
-    const c = memory.crypto;
+    const all = memory.crypto;
+    const list = all?.accounts || [];
+    const c = list.find((a) => a.account === memory.cryptoAccount) || list[0];
+    const top = c?.rule?.top ?? 5;
     const head = `<div class="card-head"><h2>6 · Kripto sanal hesap (7/24)</h2><span class="sub">USD · kesirli miktar · yapay zekasız kural</span>
-      <span class="spacer"></span>${c?.exists ? `<button class="btn small" type="button" data-crypto-step>${icon("refresh", "sm")} Şimdi kontrol et</button>` : ""}</div>
-      <p class="muted small" style="margin:0 0 10px">Her çeyrek başında 15 büyük coin son 90 günlük getiriye göre sıralanır, en güçlü 5'i seçilir. Seçilen coinde
-        supertrend (çarpan 2, ATR 10) yukarı dönünce ve BTC 50 günlük ortalamasının üstündeyken özsermayenin 1/5'iyle alınır; supertrend aşağı dönünce ya da
+      <span class="spacer"></span>${all?.exists ? `<button class="btn small" type="button" data-crypto-step>${icon("refresh", "sm")} Şimdi kontrol et</button>` : ""}</div>
+      <p class="muted small" style="margin:0 0 10px">Her çeyrek başında 15 büyük coin son 90 günlük getiriye göre sıralanır, en güçlü ${top}'i seçilir. Seçilen coinde
+        supertrend (çarpan 2, ATR 10) yukarı dönünce ve BTC 50 günlük ortalamasının üstündeyken özsermayenin 1/${top}'iyle alınır; supertrend aşağı dönünce ya da
         coin seçimden düşünce satılır. Günler UTC'ye göre kapanır; VPS her saat kontrol eder. Komisyon %0,1, kayma %0,1.</p>`;
-    if (!c) {
+    if (!all) {
       box.innerHTML = `${head}<p class="muted small">Yükleniyor…</p>`;
       return;
     }
-    if (!c.exists) {
+    if (!all.exists) {
       box.innerHTML = `${head}<p class="notice">${icon("alert", "sm")} Kripto sanal hesabı henüz açılmadı (sunucuda <code>marketalyzer-crypto init</code>).</p>`;
       return;
     }
-    box.innerHTML = `${head}
+    const switcher = list.length > 1 ? `<div class="segmented" data-crypto-accounts style="margin-bottom:10px">${list.map((a) =>
+      `<button type="button" data-crypto-account="${esc(a.account)}" class="${a === c ? "active" : ""}">${esc(a.label)}${a.account === "paper" ? " (ana)" : ""} · ${pctText(a.return_pct)}</button>`).join("")}</div>` : "";
+    box.innerHTML = `${head}${switcher}
       <div class="tiles">
         ${tile("Başlangıç", fmtUsd(c.initial), { note: `${fmtDate(c.created)}` })}
         ${tile("Şimdi", fmtUsd(c.value), { cls: `${tone(c.return_pct)}-text`, note: pctText(c.return_pct) })}
@@ -865,24 +872,32 @@ export function render(root) {
           { key: "pnl", label: "Kâr/zarar", num: true, format: (v) => (v == null ? "—" : fmtUsd(v, 2)) },
           { key: "reason", label: "Neden" },
         ], c.fills)}</div></details>`;
-    if (c.equity.length > 1) {
+    const curves = list.filter((a) => a.equity.length > 1);
+    if (curves.length) {
       lineChart($("[data-crypto-curve]", box), {
-        series: [{ name: "Kripto sanal hesap", color: token("--accent"), points: c.equity }],
-        height: 200, format: (v) => fmtUsd(v), label: "Kripto sanal hesap özsermayesi",
+        series: curves.map((a) => ({ name: a.label, color: cryptoColor(list.indexOf(a)), points: a.equity })),
+        height: 200, format: (v) => fmtUsd(v), label: "Kripto sanal hesapların özsermayesi",
       });
     }
   }
 
   async function loadCrypto() {
-    memory.crypto = await api("/api/crypto").catch(() => ({ exists: false }));
+    memory.crypto = await api("/api/crypto").catch(() => ({ exists: false, accounts: [] }));
+    drawCrypto();
+  }
+
+  function pickCryptoAccount(button) {
+    memory.cryptoAccount = button.dataset.cryptoAccount;
+    store.set("strategy.crypto.account", memory.cryptoAccount);
     drawCrypto();
   }
 
   async function cryptoStep(button) {
     busy(button, true, "Kontrol ediliyor…");
     try {
-      const report = await api("/api/crypto/step", {});
-      toast(report.fills?.length ? `${report.fills.length} işlem yapıldı.` : report.days?.length ? "Gün işlendi; yeni işlem yok." : "İşlenecek yeni gün yok; değer güncellendi.");
+      const reports = Object.values(await api("/api/crypto/step", {}));
+      const fills = reports.reduce((n, r) => n + (r.fills?.length || 0), 0);
+      toast(fills ? `${fills} işlem yapıldı.` : reports.some((r) => r.days?.length) ? "Gün işlendi; yeni işlem yok." : "İşlenecek yeni gün yok; değerler güncellendi.");
     } catch (error) {
       toast(error.message, "error");
     }
@@ -1144,6 +1159,8 @@ export function render(root) {
     }
     const cryptoButton = event.target.closest("[data-crypto-step]");
     if (cryptoButton) return cryptoStep(cryptoButton);
+    const cryptoAccount = event.target.closest("[data-crypto-account]");
+    if (cryptoAccount) return pickCryptoAccount(cryptoAccount);
     const order = event.target.closest("[data-order]");
     if (order) emit("order", order.dataset.order);
   });
@@ -1156,6 +1173,7 @@ export function render(root) {
   drawLive();
   drawRotation();
   loadAuto();
+  memory.cryptoAccount ??= store.get("strategy.crypto.account", "paper");
   drawCrypto();
   loadCrypto();
   loadOptions();

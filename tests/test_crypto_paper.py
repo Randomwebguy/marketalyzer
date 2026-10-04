@@ -217,12 +217,37 @@ def test_missed_days_are_caught_up_in_order(ledger):
 # --- Web ----------------------------------------------------------------------------
 
 
-def test_the_web_shows_the_crypto_account(monkeypatch):
+def test_each_account_keeps_its_own_rule_and_one_step_serves_all(monkeypatch):
+    with runner.open_account("paper", 100_000, now=NOW) as main:
+        assert runner.rule_of(main) == momentum.Rule()
+    runner.open_account("top3", 50_000, top=3, now=NOW).close()
+    with pytest.raises(FileExistsError):
+        runner.open_account("top3")
+    with pytest.raises(ValueError):
+        runner.ledger_path("../evil")
+    assert runner.accounts() == ["paper", "top3"]
+    calls = []
+
+    def counting(code, *args, **kwargs):
+        calls.append(code)
+        return fake_load(code, *args, **kwargs)
+
+    reports = runner.step_all(NOW, counting)
+    assert len(reports["paper"]["selection"]) == 5
+    assert reports["top3"]["selection"] == reports["paper"]["selection"][:3]
+    assert calls.count("ETH-USD") == 2  # daily once, hourly once, for both accounts
+    with CryptoLedger(runner.ledger_path("top3")) as ledger:
+        assert runner.status(ledger)["label"] == "En güçlü 3"
+
+
+def test_the_web_shows_the_crypto_accounts(monkeypatch):
     app = create_app(TOKEN)
     with TestClient(app) as client:
         client.headers["Authorization"] = f"Bearer {TOKEN}"
-        assert client.get("/api/crypto").json() == {"exists": False}
-        CryptoLedger.create(runner.ledger_path(), 50_000, now=NOW).close()
+        assert client.get("/api/crypto").json() == {"exists": False, "accounts": []}
+        assert client.post("/api/crypto/step").status_code == 404
+        runner.open_account("paper", 50_000, now=NOW).close()
+        runner.open_account("top3", 50_000, top=3, now=NOW).close()
         monkeypatch.setattr(runner.services, "load_bars", fake_load)
         monkeypatch.setattr(
             runner,
@@ -230,8 +255,12 @@ def test_the_web_shows_the_crypto_account(monkeypatch):
             type("Clock", (), {"now": staticmethod(lambda tz=None: NOW)}),
         )
         stepped = client.post("/api/crypto/step").json()
-        assert stepped["days"] == ["2026-10-03"] and len(stepped["selection"]) == 5
+        assert stepped["paper"]["days"] == ["2026-10-03"]
+        assert len(stepped["top3"]["selection"]) == 3
         state = client.get("/api/crypto").json()
-        assert state["exists"] and state["initial"] == 50_000
-        assert state["value"] == pytest.approx(50_000, rel=0.01)
-        assert state["equity"] and state["selection"] == stepped["selection"]
+        main, second = state["accounts"]
+        assert state["exists"] and main["account"] == "paper"
+        assert main["initial"] == 50_000 and main["rule"]["top"] == 5
+        assert main["value"] == pytest.approx(50_000, rel=0.01)
+        assert main["equity"] and main["selection"] == stepped["paper"]["selection"]
+        assert second["label"] == "En güçlü 3" and second["rule"]["top"] == 3

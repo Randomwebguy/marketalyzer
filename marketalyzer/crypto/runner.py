@@ -1,4 +1,4 @@
-"""Run the crypto rule on the paper account; meant to be called every hour.
+"""Run the crypto rule on the paper accounts; meant to be called every hour.
 
 A crypto daily bar is a UTC day, final once that day has ended. Each step
 processes the finished days not processed yet, in order: at a new quarter it
@@ -7,17 +7,22 @@ supertrend exit and buys on a supertrend entry while BTC is in its uptrend.
 Orders fill at the latest price (the last hourly close) with fee and
 slippage, and the account's value is recorded at those prices.
 
-    marketalyzer-crypto init [--cash 100000]
-    marketalyzer-crypto step
-    marketalyzer-crypto status
+Each account keeps its own rule (how many coins it holds); "paper" is the
+main account, with the tested top five.
+
+    marketalyzer-crypto init [--account paper] [--cash 100000] [--top 5]
+    marketalyzer-crypto step [--account NAME]   # every account when omitted
+    marketalyzer-crypto status [--account paper]
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections.abc import Callable
+from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -31,13 +36,56 @@ from marketalyzer.paper.cli import default_home
 
 HISTORY_DAYS = 600  # enough for a year of history plus the averages
 MAX_CATCH_UP = 14  # finished days processed in one step at most
+MAIN = "paper"
+NAME = re.compile(r"[a-z0-9_-]{1,32}")
 
 Loader = Callable[..., tuple[pd.DataFrame, Any]]
 
 
-def ledger_path() -> Path:
-    """Return the crypto paper account's file."""
-    return default_home() / "crypto" / "paper.sqlite"
+def ledger_path(account: str = MAIN) -> Path:
+    """Return a crypto paper account's file."""
+    if not NAME.fullmatch(account):
+        raise ValueError(f"Geçersiz hesap adı: {account!r}")
+    return default_home() / "crypto" / f"{account}.sqlite"
+
+
+def accounts() -> list[str]:
+    """Return the existing accounts, the main one first."""
+    names = sorted(p.stem for p in (default_home() / "crypto").glob("*.sqlite"))
+    return sorted((n for n in names if NAME.fullmatch(n)), key=lambda n: n != MAIN)
+
+
+def open_account(
+    account: str, cash: float = 100_000.0, top: int = 5, now: datetime | None = None
+) -> CryptoLedger:
+    """Create an account that trades the rule with ``top`` coins."""
+    ledger = CryptoLedger.create(ledger_path(account), cash, now=now)
+    ledger.put("rule", asdict(momentum.Rule(top=top)))
+    return ledger
+
+
+def rule_of(ledger: CryptoLedger) -> momentum.Rule:
+    """Return the account's rule (the tested defaults when none is stored)."""
+    return momentum.Rule(**ledger.get("rule", {}))
+
+
+def cached(load: Loader | None = None) -> Loader:
+    """Return ``load`` remembering its answers, so accounts share one download."""
+    load = load or services.load_bars
+    memo: dict[tuple, Any] = {}
+
+    def wrapper(code, start, end, interval, **kwargs):
+        key = (code, start, end, interval, tuple(sorted(kwargs.items())))
+        if key not in memo:
+            try:
+                memo[key] = load(code, start, end, interval, **kwargs)
+            except Exception as error:  # noqa: BLE001 - raised again for every caller
+                memo[key] = error
+        if isinstance(memo[key], Exception):
+            raise memo[key]
+        return memo[key]
+
+    return wrapper
 
 
 def _day(index: Any) -> pd.DatetimeIndex:
@@ -81,9 +129,10 @@ def step(
     ledger: CryptoLedger,
     now: datetime | None = None,
     load: Loader | None = None,
-    rule: momentum.Rule = momentum.Rule(),
+    rule: momentum.Rule | None = None,
 ) -> dict[str, Any]:
     """Process the finished days since the last step; return what was done."""
+    rule = rule or rule_of(ledger)
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     today = now.date()
     finished = today - timedelta(days=1)
@@ -114,6 +163,18 @@ def step(
     report["value"] = round(ledger.record(prices, now), 2)
     report["selection"] = ledger.get("selection", [])
     return report
+
+
+def step_all(
+    now: datetime | None = None, load: Loader | None = None
+) -> dict[str, dict[str, Any]]:
+    """Step every account, downloading each coin's bars once."""
+    load = cached(load)
+    out = {}
+    for account in accounts():
+        with CryptoLedger(ledger_path(account)) as ledger:
+            out[account] = step(ledger, now, load)
+    return out
 
 
 def _process(ledger, day, frames, flags, up, prices, now, rule, report) -> None:
@@ -162,6 +223,7 @@ def _record(report: dict[str, Any], fill: Any) -> None:
 
 def status(ledger: CryptoLedger) -> dict[str, Any]:
     """Return the account for the web page: value, positions, fills, curve."""
+    rule = rule_of(ledger)
     prices = ledger.get("prices", {})
     value = ledger.value(prices)
     positions = []
@@ -175,6 +237,8 @@ def status(ledger: CryptoLedger) -> dict[str, Any]:
     curve = ledger.equity_curve()
     return {
         "exists": True,
+        "account": ledger.path.stem,
+        "label": f"En güçlü {rule.top}",
         "initial": ledger.initial_cash,
         "cash": round(ledger.cash, 2),
         "value": round(value, 2),
@@ -186,7 +250,7 @@ def status(ledger: CryptoLedger) -> dict[str, Any]:
         "created": ledger.created,
         "fills": [f.to_dict() for f in ledger.fills(limit=50)],
         "equity": [{"t": t, "v": round(v, 2)} for t, v in curve[-2000:]],
-        "rule": momentum.Rule().__dict__,
+        "rule": asdict(rule),
         "fee": ledger.fee,
         "slippage": ledger.slippage,
     }
@@ -197,17 +261,30 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="marketalyzer-crypto",
                                      description="Kripto sanal hesabı (7/24, USD).")  # fmt: skip
     parser.add_argument("command", choices=("init", "step", "status"))
+    parser.add_argument(
+        "--account", help="hesap adı (varsayılan: paper; step'te hepsi)"
+    )
     parser.add_argument("--cash", type=float, default=100_000.0)
+    parser.add_argument("--top", type=int, default=5, help="tutulacak coin sayısı")
     args = parser.parse_args(argv)
-    path = ledger_path()
     if args.command == "init":
-        CryptoLedger.create(path, args.cash).close()
-        print(json.dumps({"created": str(path), "cash": args.cash}))
+        account = args.account or MAIN
+        open_account(account, args.cash, args.top).close()
+        print(json.dumps({"created": str(ledger_path(account)), "cash": args.cash,
+                          "top": args.top}))  # fmt: skip
         return 0
+    if args.command == "step" and not args.account:
+        if not accounts():
+            print("Kripto sanal hesabı yok; önce 'marketalyzer-crypto init'.",
+                  file=sys.stderr)  # fmt: skip
+            return 1
+        for account, report in step_all().items():
+            print(json.dumps({"account": account, **report}, ensure_ascii=False,
+                             default=str))  # fmt: skip
+        return 0
+    path = ledger_path(args.account or MAIN)
     if not path.exists():
-        print(
-            "Kripto sanal hesabı yok; önce 'marketalyzer-crypto init'.", file=sys.stderr
-        )
+        print(f"Kripto sanal hesabı yok: {path}", file=sys.stderr)
         return 1
     with CryptoLedger(path) as ledger:
         out = step(ledger) if args.command == "step" else status(ledger)
