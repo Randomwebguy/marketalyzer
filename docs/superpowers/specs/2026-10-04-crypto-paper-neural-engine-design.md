@@ -63,6 +63,16 @@ Tarih: 2026-10-04. Onay: kullanıcı "Öğrenen uzman seçimi" ve "Önce sanal h
 - Sabit kuraldan iyi ya da aynı getiriyi daha az düşüşle verirse gölge modda sanal hesabın yanında çalışır ve günlük ne öğrendiğini raporlar.
 - Sinir ağı katmanı (durumdan uzman ödülü tahmini) ancak tablo motorunu ileriye yürüyen testte geçerse eklenir.
 
+## Sonuç (2026-10-04)
+
+- Aşama 1 VPS'te çalışıyor: `marketalyzer-crypto.timer` her saat, başlangıç 100.000 $, Q4 seçimi LINK AVAX ETH LTC SOL.
+- Aşama 2 doğrulamayı geçemedi (`scripts/crypto/neural_engine.py`, 96 ayar). 2024 → 2026-10 döneminde, 100 000 $ başlangıçla:
+  - Seçilen ayar 190 200 $ yaptı; en büyük düşüş %-30, Sharpe 0,80.
+  - Sabit kural 246 900 $ yaptı; en büyük düşüş %-41, Sharpe 0,95.
+  - Uzmanların eşit karışımı 194 400 $ yaptı.
+  - Hiçbir ayar sabit kuralı geçmedi.
+- Motor gölge moda alınmadı. Sinir ağı katmanı tablo motorunun geçmesine bağlıydı; o da eklenmedi.
+
 ## Riskler
 
 - Coin listesi bugünün büyüklerinden oluşuyor (hayatta kalma yanlılığı).

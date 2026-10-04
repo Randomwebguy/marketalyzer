@@ -461,6 +461,20 @@ marketalyzer-crypto status
 
 `step` kaçırılan günleri sırayla işler (en fazla 14 gün). Hesap `~/.local/share/marketalyzer/crypto/paper.sqlite` dosyasındadır. VPS'te `marketalyzer-crypto.timer` her saatin 10. dakikasında (UTC, 7/24) bir adım çalıştırır.
 
+**NeuralEngine: öğrenen uzman seçimi** (`marketalyzer/crypto/neural.py`, `scripts/crypto/neural_engine.py`). Altı sınanmış kural, yani uzman, gölgede kendi defterini işletir: en güçlü 5 / en güçlü 3 / 15 coin + supertrend + BTC filtresi, 3 aylık rotasyon + BTC 200 günlük filtre, SMA 20/100 + BTC filtresi ve nakit. Motor her gün uzmanların gerçekleşen log getirisine göre ağırlıklarını çarpımsal olarak günceller (Hedge). Bunu piyasa durumuna göre ayrı ayrı yapar: BTC'nin 50/200 günlük ortalamalara göre konumu, genişlik ya da oynaklık. Eski sonuçlar unutulur ve her uzman bir taban ağırlık korur. Sermaye ağırlıklarla uzmanların pozisyonlarına paylaştırılır. Ayarlar yalnızca 2021-23'e göre seçildi; motor 2021'den kesintisiz çalıştı ve 2024 → 2026-10 dönemine dokunulmadı.
+
+| 100 000 $'dan, 2024 → 2026-10 | Para | En büyük düşüş | Sharpe |
+|---|---|---|---|
+| Sabit kural (sanal hesap: en güçlü 5) | 246 900 $ | %-41 | 0,95 |
+| En güçlü 3 + aynı kural | 315 400 $ | %-38 | 1,04 |
+| NeuralEngine (2021-23 Sharpe'ına göre seçilen ayar) | 190 200 $ | %-30 | 0,80 |
+| NeuralEngine (2021-23 parasına göre seçilen ayar) | 163 200 $ | %-43 | 0,45 |
+| Uzmanların eşit karışımı (öğrenmesiz) | 194 400 $ | %-28 | 0,84 |
+| Eşit ağırlıklı al-tut | 120 700 $ | %-70 | 0,10 |
+| BTC | 199 900 $ | %-53 | 0,53 |
+
+Denenen 96 ayarın hiçbiri test döneminde sabit kuralı geçemedi; ortanca 192 500 $ ile eşit karışımın düzeyinde kaldı. Hızlı öğrenen ayarlar 2021'in kazananlarını kovaladı: eğitimde 1,8 M $ yaptılar, testte geriledi. Uzmanların günlük getiri farkı çoğunlukla gürültü olduğundan öğrenilen ağırlıklar ya eşit karışıma yaklaşıyor ya da gürültüyü izliyor. Bu, tahmin birleştirme literatüründeki bilinen sonuçtur: öğrenilen ağırlıklar test dışı veride çoğu zaman eşit ağırlığı geçemez (Smith & Wallis, 2009, *A Simple Explanation of the Forecast Combination Puzzle*). Hedge'in garantisi de zaten en iyi tek uzmana yaklaşmaktır, onu geçmek değildir. Motor tasarımdaki eşiği geçemediği için gölge moda alınmadı.
+
 ## Web uygulaması ve Cloudflare tüneli
 
 Masaüstünde pencere çerçeveli, kenar çubuklu bir uygulama; telefonda alt sekme çubuğu ve alttan açılan sayfalarla yerel uygulama hissi veren bir arayüz. Kenar çubuğundaki **Piyasa / Lab** anahtarı iki çalışma alanı arasında geçiş yapar:
