@@ -165,6 +165,56 @@ def history(
     return frame
 
 
+FUTURES = "https://fapi.binance.com/fapi/v1"
+
+
+def futures_bars(
+    symbol: str, interval: str, start: datetime | None = None, limit: int = 1000,
+    now: datetime | None = None,
+) -> pd.DataFrame:  # fmt: skip
+    """Return a USDT perpetual's finished bars (index = bar start, UTC, naive)."""
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    if start is not None:
+        params["startTime"] = int(start.timestamp() * 1000)
+    rows = _get(f"{FUTURES}/klines", **params).json()
+    if not rows:
+        return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+    frame = pd.DataFrame([r[:6] for r in rows],
+                         columns=["open_time", "Open", "High", "Low", "Close", "Volume"])  # fmt: skip
+    ends = pd.to_datetime([int(r[6]) + 1 for r in rows], unit="ms")
+    frame.index = pd.to_datetime(frame.pop("open_time").astype("int64"), unit="ms")
+    frame = frame.astype(float)
+    cutoff = pd.Timestamp((now or datetime.now(timezone.utc)).replace(tzinfo=None))
+    return frame[ends <= cutoff]
+
+
+def futures_active(count: int = 10, exclude: set[str] | None = None) -> list[str]:
+    """Return the USDT perpetuals with the most 24-hour volume."""
+    rows = _get(f"{FUTURES}/ticker/24hr").json()
+    exclude = exclude or set()
+    ranked = sorted(
+        (r for r in rows
+         if r["symbol"].endswith("USDT") and "_" not in r["symbol"]
+         and r["symbol"].removesuffix("USDT") not in exclude),
+        key=lambda r: float(r["quoteVolume"]), reverse=True,
+    )  # fmt: skip
+    return [r["symbol"] for r in ranked[:count]]
+
+
+def futures_prices() -> dict[str, float]:
+    """Return every USDT perpetual's last price."""
+    return {
+        r["symbol"]: float(r["price"]) for r in _get(f"{FUTURES}/ticker/price").json()
+    }
+
+
+def futures_funding_rate(symbol: str) -> float:
+    """Return the perpetual's latest funding rate (per eight hours)."""
+    return float(
+        _get(f"{FUTURES}/premiumIndex", symbol=symbol).json()["lastFundingRate"]
+    )
+
+
 FUNDING = "https://fapi.binance.com/fapi/v1/fundingRate"
 
 

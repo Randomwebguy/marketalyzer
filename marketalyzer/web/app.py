@@ -11,6 +11,7 @@ import json
 import os
 import secrets
 import tempfile
+import time
 import uuid
 from dataclasses import asdict
 from datetime import date
@@ -50,7 +51,11 @@ from marketalyzer.ai.openrouter import (
 )
 from marketalyzer.ai.settings import load_settings, public_settings, save_settings
 from marketalyzer.backtest.costs import BistCosts
-from marketalyzer.crypto import runner as crypto_runner
+from marketalyzer.crypto import (
+    binance,
+    levrun,
+    runner as crypto_runner,
+)
 from marketalyzer.crypto.ledger import CryptoLedger
 from marketalyzer.paper import autorotate
 from marketalyzer.paper.account import OrderRejected, PaperAccount
@@ -1044,6 +1049,22 @@ def create_app(
             return await asyncio.to_thread(rotation.run_rotation, config)
         except ValueError as error:
             raise _fail(error) from error
+
+    live_prices: dict[str, Any] = {"time": 0.0, "prices": {}}
+
+    @app.get("/api/leverage")
+    def leverage_accounts() -> dict[str, Any]:
+        names = levrun.existing()
+        if not names:
+            return {"exists": False, "accounts": []}
+        if time.monotonic() - live_prices["time"] > 5:
+            try:
+                live_prices["prices"] = binance.futures_prices()
+            except Exception:  # noqa: BLE001 - the stored prices are shown instead
+                live_prices["prices"] = {}
+            live_prices["time"] = time.monotonic()
+        accounts = [levrun.status(name, live_prices["prices"]) for name in names]
+        return {"exists": True, "accounts": accounts}
 
     @app.get("/api/crypto")
     def crypto_accounts() -> dict[str, Any]:

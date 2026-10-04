@@ -565,6 +565,44 @@ marketalyzer-crypto init --account donchian --signal donchian --regime --vol 0.2
 
 Bu hesaplar her ayın ilk kapanmış gününde evreni Binance'ten yeniden kurar. Her gün hedef ağırlıkları hesaplar ve hedefinden %25'ten fazla sapan pozisyonu dengeler.
 
+### Kaldıraçlı deney: long ve short hesap, martingale (canlı, sanal)
+
+Bu deney kullanıcının isteğiyle kuruldu ve risk alarak kazanmayı hedefliyor. Kodlar `marketalyzer/crypto/confidence.py`, `martingale.py` ve `levrun.py` dosyalarında; komut `marketalyzer-leverage`. Gerçek emir gönderilmez: fiyatlar Binance vadeli (USDT perpetual) piyasasından canlı alınır, işlemler sanaldır.
+
+- **Hesaplar:** biri yalnızca long, diğeri yalnızca short açar. Her biri 10 000 $ ile başlar ve aynı anda en fazla bir izole marjinli pozisyon tutar.
+- **Güven skoru:** en işlem gören 10 vadeli kontrat her 15 dakikalık kapanışta 0-100 arası puanlanır. Bileşenler ve ağırlıkları:
+  - 30 dk EMA 20/50 trendi: 25
+  - 15 dk trend: 20
+  - RSI: 20
+  - MACD histogramı: 15
+  - 20 barlık kırılım: 10
+  - Hacim: 10
+  - Yalnızca kapanmış 30 dk barları kullanılır.
+- **Giriş:** skor 70 ve üstündeyse en yüksek skorlu coinde pozisyon açılır. Marjin, döngü başındaki cüzdanın %20'sidir.
+- **Çıkış:** zarar durdur 1 ATR, kâr al 1,5 ATR (15 dakikalık ATR). Skor 45'in altına düşer ya da 4 saat dolarsa pozisyon kapanır.
+- **Martingale:** kayıptan sonra kaldıraç 2x → 4x → 8x → 10x çıkar, marjin aynı kalır. Döngünün toplamı kâra geçince 2x'e dönülür. 10x'te kaybedilirse döngü zararla kapanır. Cüzdan başlangıcın %10'unun altına inerse yeni pozisyon açılmaz.
+- **Gerçekçilik:**
+  - Açık pozisyon her dakika 1 dakikalık mumlarla kontrol edilir.
+  - Fiyat önce yakın olan seviyeye değer: zarar durdur ya da tasfiye. Bar o seviyenin ötesinde açılırsa işlem açılıştan gerçekleşir.
+  - Tasfiyede marjinin tamamı gider.
+  - Komisyon %0,05, kayma %0,02 (her taraf), fonlama 8 saatte bir gerçek orandan alınır.
+- **İzleme:** "AI Strateji → 7" kartında iki hesabın değeri, kaldıraç merdiveni, açık pozisyon, güven skoru tablosu, son işlemler ve özsermaye eğrisi görünür. Panel sayfasında kısa bir özet var. Sayfa 10 saniyede bir yenilenir.
+
+**Aynı kurallar son 60 günde** (`marketalyzer-leverage replay --days 60`; 15 dakikalık barların en yüksek ve en düşük fiyatlarıyla, 2026-10-04'te çalıştırıldı):
+
+| Hesap | 10 000 $ → | İşlem | İsabet | Komisyon | Kazanılan / kaybedilen döngü |
+|---|---|---|---|---|---|
+| Long | 993 $ (%-90) | 1 186 | %39 | 4 527 $ | 366 / 129 |
+| Short | 2 050 $ (%-80) | 871 | %34 | 4 012 $ | 241 / 112 |
+
+Kayıpların büyük kısmı komisyondan geliyor. Kaldıraç komisyonu da katlıyor: 1 ATR'lik bir 15 dakikalık stop çoğu zaman %0,1-0,3 kadar dar, gidiş-dönüş maliyet ise pozisyonun %0,14'ü. Martingale beklenen değeri değiştirmez; birçok küçük kazancı seyrek büyük kayıplara çevirir. Deney bu yüzden ayarlar değiştirilmeden, kullanıcının istediği gibi canlı izlenmek için çalıştırılıyor.
+
+```bash
+marketalyzer-leverage init       # iki hesabı 10 000 $ ile açar
+marketalyzer-leverage step       # bir dakikalık adım (VPS'te her dakika)
+marketalyzer-leverage replay --days 60
+```
+
 **Uygulanmayanlar ve nedenleri** (araştırma raporuna göre):
 
 - Korku ve açgözlülük endeksi: getiriyi izliyor, öncü değil.

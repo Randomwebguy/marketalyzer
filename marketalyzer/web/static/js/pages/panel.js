@@ -4,6 +4,7 @@ import {
   lineChart, loadPaper, loadQuotes, money, mount, normalize, on, pctText, pill, responsive, session, state,
   store, symbolColor, token, toast, tone,
 } from "/static/js/core.js";
+import { mountLeverage } from "/static/js/leverage.js";
 
 const RANGES = { "1H": ["Hafta", 7], "1A": ["Ay", 31], "3A": ["3 ay", 92], all: ["Tümü", 99999] };
 
@@ -45,6 +46,7 @@ export function render(view) {
         <article class="card ai-card glow-violet" id="ai-card"></article>
       </div>
       <div class="asset-notice" id="asset-notice"></div>
+      <section class="card" id="lev-card" style="margin-bottom:16px"></section>
       <div class="row-tools">
         <section class="card chart-card" id="chart-card"></section>
         <section class="card ticket-card" id="ticket-card"></section>
@@ -474,6 +476,7 @@ export function render(view) {
   }
 
   renderAll();
+  mountLeverage($("#lev-card"), { compact: true });
   const symbols = [...new Set([...state.watchlist, ...(state.paper?.positions ?? []).map((x) => x.symbol), normalize(state.symbol)])];
   loadQuotes(symbols).then(() => {
     renderAssets();

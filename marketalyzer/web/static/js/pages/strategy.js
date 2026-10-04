@@ -5,6 +5,7 @@ import {
   pill, slotColor, store, stream, tipTime, toast, token, tone,
 } from "/static/js/core.js";
 import { highlightLine } from "/static/js/editor.js";
+import { mountLeverage } from "/static/js/leverage.js";
 import { renderMarkdown } from "/static/js/markdown.js";
 import { chartWithTable, tableHtml, tile } from "/static/js/results.js";
 
@@ -68,6 +69,7 @@ export function render(root) {
         <section class="card" data-live></section>
         <section class="card" data-rotation></section>
         <section class="card" data-crypto></section>
+        <section class="card" data-leverage></section>
       </div>
     </div>`;
 
@@ -1201,6 +1203,7 @@ export function render(root) {
   memory.cryptoAccount ??= store.get("strategy.crypto.account", "paper");
   drawCrypto();
   loadCrypto();
+  mountLeverage($("[data-leverage]", root));
   loadOptions();
   return () => {
     authorAbort?.abort();
