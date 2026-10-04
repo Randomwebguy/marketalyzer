@@ -1,7 +1,7 @@
 // marketalyzer web app shell: routing, sidebar, tab bar, command palette.
 import {
-  $, $$, api, arcGauge, emit, esc, fmtNumber, go, icon, initials, loadFx, loadPaper, logout, money, on, remote,
-  session, sheet, state, store, symbolColor, toast,
+  $, $$, api, arcGauge, emit, esc, fmtNumber, go, icon, initials, loadFx, loadPaper, logout, money, on, reloadIfDeployed,
+  remote, session, sheet, state, store, symbolColor, toast,
 } from "/static/js/core.js";
 
 const page = (name) => () => import(`/static/js/pages/${name}.js`);
@@ -41,6 +41,7 @@ let renderToken = 0;
 let mode = store.get("mode", "piyasa");
 
 async function render() {
+  reloadIfDeployed();
   const { route, params } = parseHash();
   if (route.group) mode = route.group;
   renderNav(route);
@@ -297,6 +298,9 @@ function bindShell() {
   $("#currency").addEventListener("click", toggleCurrency);
   $("#currency").textContent = state.currency === "TRY" ? "₺" : "$";
   window.addEventListener("hashchange", render);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") reloadIfDeployed();
+  });
   on("route", render);
   on("paper", () => renderNav());
   on("display", () => renderNav());

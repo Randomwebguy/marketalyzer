@@ -143,9 +143,25 @@ async function readBackend() {
   try {
     const response = await fetch("/backend.json", { cache: "no-store" });
     const config = response.ok ? await response.json() : null;
+    if (remote && config?.updated) remote.updated ??= config.updated;
     return config?.api ? String(config.api).replace(/\/+$/, "") : null;
   } catch {
     return null;
+  }
+}
+
+let deployCheckedAt = 0;
+
+/** Reload once a new deploy is out (backend.json changes on every deploy). */
+export async function reloadIfDeployed() {
+  if (!remote?.updated || Date.now() - deployCheckedAt < 60_000) return;
+  deployCheckedAt = Date.now();
+  try {
+    const response = await fetch("/backend.json", { cache: "no-store" });
+    const config = response.ok ? await response.json() : null;
+    if (config?.updated && config.updated !== remote.updated) location.reload();
+  } catch {
+    // Offline: keep the page as it is.
   }
 }
 

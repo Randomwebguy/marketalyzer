@@ -52,6 +52,9 @@ class TestAccess:
             "/sw.js",
         ):
             assert anonymous.get(path).status_code == 200, path
+        for path in ("/static/app.js", "/static/js/pages/strategy.js", "/sw.js"):
+            # revalidated on every load, so a deploy shows up without a stale copy
+            assert anonymous.get(path).headers["cache-control"] == "no-cache", path
         manifest = anonymous.get("/manifest.webmanifest")
         assert manifest.headers["content-type"].startswith("application/manifest+json")
         assert manifest.json()["display"] == "standalone"

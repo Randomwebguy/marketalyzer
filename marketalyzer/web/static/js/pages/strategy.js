@@ -5,6 +5,7 @@ import {
   pill, slotColor, store, stream, tipTime, toast, token, tone,
 } from "/static/js/core.js";
 import { highlightLine } from "/static/js/editor.js";
+import { mountActivity } from "/static/js/activity.js";
 import { mountLeverage } from "/static/js/leverage.js";
 import { renderMarkdown } from "/static/js/markdown.js";
 import { chartWithTable, tableHtml, tile } from "/static/js/results.js";
@@ -57,6 +58,7 @@ function readSetup() {
 export function render(root) {
   const setup = readSetup();
   root.innerHTML = `
+    <section class="card glow-sky" data-live-summary style="margin-bottom:16px"></section>
     <div class="grid strategy">
       <aside class="stack span-4 strategy-side">
         <section class="card glow-violet" data-setup></section>
@@ -862,7 +864,7 @@ export function render(root) {
       return;
     }
     const switcher = list.length > 1 ? `<div class="segmented" data-crypto-accounts style="margin-bottom:10px">${list.map((a) =>
-      `<button type="button" data-crypto-account="${esc(a.account)}" class="${a === c ? "active" : ""}" title="${esc(a.label)}">${esc(a.short || a.label)}${a.account === "paper" ? " (ana)" : ""} · ${pctText(a.return_pct)}</button>`).join("")}</div>` : "";
+      `<button type="button" data-crypto-account="${esc(a.account)}" class="${a === c ? "active" : ""}" title="${esc(a.label)}">${esc(a.short || a.label)}${a.account === "paper" ? " (ana)" : ""} · ${a.positions.length} poz. · ${pctText(a.return_pct)}</button>`).join("")}</div>` : "";
     box.innerHTML = `${head}${switcher}
       <div class="tiles">
         ${tile("Başlangıç", fmtUsd(c.initial), { note: `${fmtDate(c.created)}` })}
@@ -1204,6 +1206,17 @@ export function render(root) {
   drawCrypto();
   loadCrypto();
   mountLeverage($("[data-leverage]", root));
+  mountActivity($("[data-live-summary]", root), {
+    onPick: (key) => {
+      const [kind, name] = key.split(":");
+      if (kind === "crypto") {
+        memory.cryptoAccount = name;
+        store.set("strategy.crypto.account", name);
+        drawCrypto();
+      }
+      $(kind === "crypto" ? "[data-crypto]" : "[data-leverage]", root).scrollIntoView({ behavior: "smooth", block: "start" });
+    },
+  });
   loadOptions();
   return () => {
     authorAbort?.abort();

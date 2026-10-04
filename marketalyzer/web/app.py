@@ -398,6 +398,16 @@ def create_app(
         return response
 
     @app.middleware("http")
+    async def fresh_interface(request: Request, call_next):
+        # Browsers must ask again for the interface's files (304 when unchanged),
+        # so a deploy shows up at once instead of after a guessed cache lifetime.
+        response = await call_next(request)
+        path = request.url.path
+        if path.startswith("/static/") or path in ("/", "/sw.js"):
+            response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
+    @app.middleware("http")
     async def require_token(request: Request, call_next):
         path = request.url.path
         if path.startswith(PUBLIC):

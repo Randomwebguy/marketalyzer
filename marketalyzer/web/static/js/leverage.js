@@ -12,7 +12,13 @@ const r = (v) => `${v > 0 ? "+" : ""}${fmtNumber(v, 2)}R`;
 
 function positionsHtml(a) {
   if (!a.positions.length) {
-    return `<p class="muted small" style="margin:8px 0">Açık pozisyon yok: evrende ${a.side === "long" ? "yukarı" : "aşağı"} kırılım ve günlük trend onayı bekleniyor.</p>`;
+    const near = Object.entries(a.board || {}).filter(([, b]) => b.trend)
+      .sort((x, y) => x[1].to_breakout_pct - y[1].to_breakout_pct).slice(0, 3)
+      .map(([s, b]) => `${esc(coin(s))} %${fmtNumber(Math.max(b.to_breakout_pct, 0), 2)}`);
+    const next = new Date(Math.ceil(Date.now() / 14_400_000) * 14_400_000);
+    return `<p class="muted small" style="margin:8px 0">Açık pozisyon yok; sistem çalışıyor ve ${a.side === "long" ? "yukarı" : "aşağı"} kırılım bekliyor.
+      Sıradaki karar ${next.toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })}.
+      ${near.length ? `Kırılıma en yakın (trendi uygun): ${near.join(", ")}.` : "Şu an trend şartını sağlayan coin yok."}</p>`;
   }
   return `<div class="table-wrap">${tableHtml([
     { key: "symbol", label: "Coin", html: (p) => `<b>${esc(coin(p.symbol))}</b>` },
