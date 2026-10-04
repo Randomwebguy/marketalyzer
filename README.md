@@ -475,6 +475,29 @@ marketalyzer-crypto status
 
 Denenen 96 ayarın hiçbiri test döneminde sabit kuralı geçemedi; ortanca 192 500 $ ile eşit karışımın düzeyinde kaldı. Hızlı öğrenen ayarlar 2021'in kazananlarını kovaladı: eğitimde 1,8 M $ yaptılar, testte geriledi. Uzmanların günlük getiri farkı çoğunlukla gürültü olduğundan öğrenilen ağırlıklar ya eşit karışıma yaklaşıyor ya da gürültüyü izliyor. Bu, tahmin birleştirme literatüründeki bilinen sonuçtur: öğrenilen ağırlıklar test dışı veride çoğu zaman eşit ağırlığı geçemez (Smith & Wallis, 2009, *A Simple Explanation of the Forecast Combination Puzzle*). Hedge'in garantisi de zaten en iyi tek uzmana yaklaşmaktır, onu geçmek değildir. Motor tasarımdaki eşiği geçemediği için gölge moda alınmadı.
 
+**İkinci hesap:** "En güçlü 3" (`marketalyzer-crypto init --account top3 --top 3`) ana hesabın yanında aynı kuralla çalışır. Her hesap kuralını kendi dosyasında tutar. `marketalyzer-crypto step` bütün hesapları ilerletir ve her coinin verisini bir kez indirir. Kart hesaplar arasında geçiş yapar ve özsermaye eğrilerini üst üste çizer.
+
+**Kaldıraç denemesi** (`marketalyzer/crypto/leverage.py`, `scripts/crypto/leverage_test.py`): giriş ve çıkışlar sanal hesaplarla aynıdır, pozisyonlar izole marjinli sürekli vadeli kontratlardır. Varsayımlar:
+
+- %0,05 taker komisyonu ve %0,1 kayma.
+- Uzun pozisyon her gün pozisyon değeri üzerinden fonlama öder: yıllık %10, stres senaryosunda %20.
+- Günün en düşük fiyatı marjini %1 bakım seviyesine indirirse pozisyon tasfiye edilir ve marjinin tamamı kaybedilir.
+
+2024 → 2026-10, 100 000 $'dan, fonlama %10:
+
+| Kural | Kaldıraç | Para | En büyük düşüş | Sharpe | Tasfiye |
+|---|---|---|---|---|---|
+| En güçlü 5 | spot (sanal hesap) | 247 100 $ | %-42 | 0,95 | 0 |
+| En güçlü 5 | 1,5x | 288 500 $ | %-55 | 0,84 | 0 |
+| En güçlü 5 | 2x | 229 000 $ | %-74 | 0,47 | 2 |
+| En güçlü 5 | 3x | 286 100 $ | %-82 | 0,47 | 4 |
+| En güçlü 3 | spot (sanal hesap) | 315 600 $ | %-38 | 1,04 | 0 |
+| En güçlü 3 | 1,5x | 380 400 $ | %-50 | 0,94 | 0 |
+| En güçlü 3 | 2x | 341 100 $ | %-68 | 0,66 | 1 |
+| En güçlü 3 | 5x | 300 700 $ | %-93 | 0,31 | 7 |
+
+Kaldıraç 2021-23 boğasında parayı katladı: en güçlü 5 ile 3x 5,7 M $ yaptı, spot 951 bin $. Ama her seviyede Sharpe düştü ve düşüş kaldıraçtan hızlı büyüdü. 10 Ekim 2025 çöküşünde 2x ve üstündeki hesaplarda LINK ve XLM pozisyonları tasfiye oldu. 5x'te 2021'de bile 16 tasfiye var. Fonlama %20 olunca her sonuç belirgin biçimde kötüleşiyor. Bu kuralda sabit kaldıraç riski ödülden hızlı artırıyor; 1,5x bile getiri başına daha fazla düşüş getiriyor.
+
 ## Web uygulaması ve Cloudflare tüneli
 
 Masaüstünde pencere çerçeveli, kenar çubuklu bir uygulama; telefonda alt sekme çubuğu ve alttan açılan sayfalarla yerel uygulama hissi veren bir arayüz. Kenar çubuğundaki **Piyasa / Lab** anahtarı iki çalışma alanı arasında geçiş yapar:
