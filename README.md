@@ -565,80 +565,76 @@ marketalyzer-crypto init --account donchian --signal donchian --regime --vol 0.2
 
 Bu hesaplar her ayın ilk kapanmış gününde evreni Binance'ten yeniden kurar. Her gün hedef ağırlıkları hesaplar ve hedefinden %25'ten fazla sapan pozisyonu dengeler.
 
-### Kaldıraçlı deney: long ve short hesap, martingale (canlı, sanal)
+### Kaldıraçlı deney: long ve short trend hesabı (canlı, sanal)
 
-Bu deney kullanıcının isteğiyle kuruldu ve risk alarak kazanmayı hedefliyor. Kodlar `marketalyzer/crypto/confidence.py`, `martingale.py` ve `levrun.py` dosyalarında; komut `marketalyzer-leverage`. Gerçek emir gönderilmez: fiyatlar Binance vadeli (USDT perpetual) piyasasından canlı alınır, işlemler sanaldır.
+Kullanıcının isteğiyle kurulan, risk alarak kazanmayı hedefleyen iki hesap: biri yalnızca long, diğeri yalnızca short açar. Her biri 10 000 $ ile başlar.
 
-- **Hesaplar:** biri yalnızca long, diğeri yalnızca short açar. Her biri 10 000 $ ile başlar ve aynı anda en fazla bir izole marjinli pozisyon tutar.
-- **Güven skoru:** en işlem gören 10 vadeli kontrat her 15 dakikalık kapanışta 0-100 arası puanlanır. Bileşenler ve ağırlıkları:
-  - 30 dk EMA 20/50 trendi: 25
-  - 15 dk trend: 20
-  - RSI: 20
-  - MACD histogramı: 15
-  - 20 barlık kırılım: 10
-  - Hacim: 10
-  - Yalnızca kapanmış 30 dk barları kullanılır.
-- **Giriş:** skor 70 ve üstündeyse en yüksek skorlu coinde pozisyon açılır. Marjin, döngü başındaki cüzdanın %20'sidir.
-- **Çıkış:** zarar durdur 1 ATR, kâr al 1,5 ATR (15 dakikalık ATR). Skor 45'in altına düşer ya da 4 saat dolarsa pozisyon kapanır.
-- **Martingale:** kayıptan sonra kaldıraç 2x → 4x → 8x → 10x çıkar, marjin aynı kalır. Döngünün toplamı kâra geçince 2x'e dönülür. 10x'te kaybedilirse döngü zararla kapanır. Cüzdan başlangıcın %10'unun altına inerse yeni pozisyon açılmaz.
-- **Gerçekçilik:**
-  - Açık pozisyon her dakika 1 dakikalık mumlarla kontrol edilir.
-  - Fiyat önce yakın olan seviyeye değer: zarar durdur ya da tasfiye. Bar o seviyenin ötesinde açılırsa işlem açılıştan gerçekleşir.
-  - Tasfiyede marjinin tamamı gider.
-  - Komisyon %0,05, kayma %0,02 (her taraf), fonlama 8 saatte bir gerçek orandan alınır.
-- **İzleme:** "AI Strateji → 7" kartında iki hesabın değeri, kaldıraç merdiveni, açık pozisyon, güven skoru tablosu, son işlemler ve özsermaye eğrisi görünür. Panel sayfasında kısa bir özet var. Sayfa 10 saniyede bir yenilenir.
+- **Kodlar:** `marketalyzer/crypto/swing.py` (kurallar) ve `levrun.py` (canlı çalıştırma).
+- **Komut:** `marketalyzer-leverage`.
+- **Gerçek emir gönderilmez.** Fiyatlar Binance vadeli (USDT perpetual) piyasasından canlı alınır, işlemler sanaldır.
 
-**Aynı kurallar son 60 günde** (`marketalyzer-leverage replay --days 60`; 15 dakikalık barların en yüksek ve en düşük fiyatlarıyla, 2026-10-04'te çalıştırıldı):
+**Kurallar** (test edilmeden önce sabitlendi):
 
-| Hesap | 10 000 $ → | İşlem | İsabet | Komisyon | Kazanılan / kaybedilen döngü |
-|---|---|---|---|---|---|
-| Long | 993 $ (%-90) | 1 186 | %39 | 4 527 $ | 366 / 129 |
-| Short | 2 050 $ (%-80) | 871 | %34 | 4 012 $ | 241 / 112 |
+- **Evren:** her ay Binance'te 30 günlük ortanca hacme göre ilk 20 coin (`live.pick_universe`). İşlemler bunların vadeli kontratlarında yapılır; PEPE gibi coinler `1000PEPEUSDT` kontratına eşlenir.
+- **Giriş:** her 4 saatlik kapanışta iki şart birden aranır:
+  - Fiyat son 30 barın (5 gün) en yüksek kapanışını geçmeli (short: en düşüğünü).
+  - Coinin son günlük kapanışı 50 günlük ortalamasının üstünde olmalı (short: altında).
+- **Stop:** başlangıçta 2 ATR (4 saatlik) uzakta. Sonra son 15 barın (2,5 gün) en düşüğünü (short: en yükseğini) izler ve yalnızca daralır.
+- **Pozisyon büyüklüğü:** her işlem stopta özsermayenin %1'ini riske eder.
+  - En fazla 5 pozisyon.
+  - Coin başına en fazla 1x, toplamda en fazla 3x özsermaye.
+  - İzole marjin 3x; tasfiye ~%33 uzakta.
+  - Martingale yok.
+- **Kontrol ve maliyet:**
+  - Stoplar her dakika 1 dakikalık mumlarla kontrol edilir.
+  - Komisyon %0,05, kayma %0,02 (her taraf).
+  - Fonlama 8 saatte bir gerçek oranla alınır: long öder, short çoğunlukla alır.
+- **İzleme:** "AI Strateji → 7" kartında şunlar görünür; Panel sayfasında kısa bir özet var. Sayfa 10 saniyede bir yenilenir.
+  - Hesap değerleri ve açık pozisyonlar (anlık K/Z, R, stop ve tasfiye uzaklığı).
+  - Son işlemler ve değer eğrisi.
+  - Evren tablosu: her coin kırılıma ne kadar uzak, trend onayı var mı.
 
-**Komisyon doğrulaması** (işlem işlem):
+**Geçmiş test** (`scripts/crypto/swing_test.py`):
 
-- Her işlemin komisyonu pozisyon değerinin %0,100'ü (ortanca): girişte %0,05, çıkışta %0,05. Bu, Binance vadeli taker oranıdır.
-- Uçlar %0,088 ve %0,104; fark, çıkıştaki fiyatın girişten farklı olmasından geliyor.
-- İşlemlerin komisyon toplamı hesabın toplamıyla aynı.
-- Ortalama pozisyon değeri long'da 3 819 $, ortalama marjin 822 $ (ortalama ~4,6x). İşlemlerin yaklaşık üçte biri 8x ya da 10x'te açıldı.
+- O tarihteki evren kullanıldı; kaldırılan coinler dahil.
+- Bir coin, ancak vadeli kontratı açıldıktan sonra işlem görür.
+- Spot 4 saatlik mumlar vadelinin yerine kullanıldı.
+- Fonlama için Binance'in gerçek geçmişi kullanıldı.
+- Tutarlar 10 000 $'dan; test dönemi de 10 000 $'a göre ölçeklenmiştir.
 
-Long hesabın 9 007 $'lık kaybının dökümü:
+| Hesap | 2020-23 (eğitim) | 2024 → 2026-10 (test) | İşlem başı (eğitim / test) | İsabet (test) |
+|---|---|---|---|---|
+| Long + günlük trend | 117 030 $, Sharpe 1,18, düşüş %-43 | **39 181 $**, Sharpe 1,05, düşüş %-40 | +0,36R / **+0,32R** | %30 |
+| Long, filtresiz | 77 694 $, Sharpe 0,94 | 34 503 $, Sharpe 0,84, düşüş %-56 | +0,25R / +0,28R | %29 |
+| Short + günlük trend | 35 484 $, Sharpe 0,77 | **10 683 $**, Sharpe 0,06 | +0,23R / **+0,04R** | %37 |
+| Short, filtresiz | 14 085 $, Sharpe 0,19 | 10 713 $, Sharpe 0,06 | +0,07R / +0,04R | %37 |
+| BTC al-tut | 58 524 $ | 19 966 $ | — | — |
 
-- Komisyon: 4 527 $ (yaklaşık yarısı).
-- Kayma: 1 812 $.
-- Fonlama: 52 $.
-- Fiyat hareketi: 2 616 $. Yani strateji maliyetler hariç de zarar etti: maliyet öncesi kazanan işlem oranı %39.
+**Bulgular:**
 
-Short hesabın 7 985 $'lık kaybı:
+- **Long tarafının iki dönemde de belirgin bir üstünlüğü var.** İşlemlerin yalnızca %30'u kazanıyor, ama kazananlar ortalama +2,9R, kaybedenler -0,8R; yani trend takibi.
+- **Günlük trend filtresi iki dönemde de long'u iyileştirdi.**
+- **Short başa başa yakın.** Kripto uzun vadede yükseldiği için beklenen bir sonuç.
+- Hiçbir testte tasfiye olmadı.
 
-- Komisyon: 3 945 $.
-- Kayma: 1 577 $.
-- Fiyat hareketi: 2 504 $.
+**Önceki deney (kaldırıldı):** 15 dakikalık güven skoru ve martingale (2x → 4x → 8x → 10x).
 
-Zarar durduran işlemlerde fiyat ortanca %0,74 (long) ve %0,51 (short) hareket etti. Gidiş-dönüş maliyet %0,14 olduğundan, maliyet tek bir stop mesafesinin beşte biri ile dörtte biri arasında. Ama ~20 işlem/gün ve martingalenin büyüttüğü pozisyonlar bu maliyeti birikerek eritiyor.
-
-Martingale beklenen değeri değiştirmez; birçok küçük kazancı seyrek büyük kayıplara çevirir. Deney bu yüzden ayarlar değiştirilmeden, kullanıcının istediği gibi canlı izlenmek için çalıştırılıyor.
-
-**Skor çalışması** (`scripts/crypto/score_study.py`, 2026-10-04):
-
-- 10 kontratta son 180 günün her 15 dakikalık kapanışından iki yönde de işlem simüle edildi (345 240 işlem).
-- **Skorun öngörü gücü yok.** Her skor diliminde isabet %38-41, işlem başına net getiri %-0,13 ile %-0,17 arası.
-  - 80 üstü skorlar, 30 altındakilerden daha iyi değil.
-  - Başa baş için isabet %49 olmalı. 1,5'e 1 kâr/zarar oranında rastgele girişler de zaten ~%40 isabet verir.
-- **Hiçbir bileşen ve aday sinyal net getiriyle anlamlı ilişki göstermedi** (sıra korelasyonu 0,025'ten küçük). Denenen adaylar:
-  - 1 saat, 4 saat ve 24 saat momentum.
-  - Taker alım/satım akışı.
-  - BTC'nin 1 ve 4 saatlik hareketi.
-  - Oynaklık oranı.
-- **Oynaklık için çıkan -0,18 korelasyon ölçüm etkisi.** Oynaklık yüksekken kazanç da kayıp da büyür ve işlemlerin %60'ı kayıptır.
-- **Veriden öğrenilen skor da işe yaramadı.** Lojistik regresyon ilk 120 güne kuruldu, son 60 günde sınandı. Altı karşılaştırmanın beşinde başa başın altında kaldı; tek artı sonuç (short, en iyi %1, net %+0,14) çoklu denemede gürültü düzeyinde.
-
-**Sonuç:** 15 dakikalık bu teknik göstergelerde, bu çıkış kurallarıyla maliyeti karşılayacak bir üstünlük yok. Ağırlıkları elle değiştirmek bunu düzeltmez, geçmişe uydurur.
+- Aynı kurallar son 60 günde long'u 10 000 $'dan 993 $'a, short'u ~2 000 $'a indirdi.
+- Komisyon hesabı işlem işlem doğrulandı: her işlemde pozisyon değerinin %0,100'ü.
+- Long'un 9 007 $'lık kaybının dökümü:
+  - Komisyon: 4 527 $.
+  - Kayma: 1 812 $.
+  - Fiyat hareketi: 2 616 $.
+- Skor çalışması (`scripts/crypto/score_study.py`, 180 gün, 345 240 simüle işlem):
+  - Skorun hiçbir diliminde isabet %41'i geçmedi; başa baş için %49 gerekiyor.
+  - Bileşenler ve aday sinyaller (momentum, taker akışı, BTC hareketi) sonuçla ilişki göstermedi.
+  - Veriden öğrenilen skor da test döneminde işe yaramadı.
+- Bu yüzden martingale bırakıldı ve deney yukarıdaki 4 saatlik trend kurallarına geçirildi. Eski hesapların dosyaları VPS'te `*-martingale.sqlite` adıyla saklanıyor.
 
 ```bash
 marketalyzer-leverage init       # iki hesabı 10 000 $ ile açar
 marketalyzer-leverage step       # bir dakikalık adım (VPS'te her dakika)
-marketalyzer-leverage replay --days 60
+marketalyzer-leverage status
 ```
 
 **Uygulanmayanlar ve nedenleri** (araştırma raporuna göre):

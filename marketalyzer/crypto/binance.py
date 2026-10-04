@@ -33,9 +33,9 @@ KEEP = ["Open", "High", "Low", "Close", "Volume", "QuoteVolume"]
 TIMEOUT = 30
 
 
-def cache_dir() -> Path:
-    """Return where the candles are kept."""
-    return default_home() / "binance" / "spot-1d"
+def cache_dir(interval: str = "1d") -> Path:
+    """Return where the candles of ``interval`` are kept."""
+    return default_home() / "binance" / f"spot-{interval}"
 
 
 def _get(url: str, **params) -> requests.Response:
@@ -69,40 +69,41 @@ def usdt_symbols() -> list[str]:
     return sorted(s for s in symbols if s.endswith("USDT"))
 
 
-def archived_months(symbol: str) -> list[str]:
+def archived_months(symbol: str, interval: str = "1d") -> list[str]:
     """Return the months ("2021-01") archived for ``symbol``."""
-    keys = _listing(f"data/spot/monthly/klines/{symbol}/1d/", delimiter=None)
-    return sorted(
-        set(re.findall(rf"{symbol}-1d-(\d{{4}}-\d{{2}})\.zip", " ".join(keys)))
-    )
+    keys = _listing(f"data/spot/monthly/klines/{symbol}/{interval}/", delimiter=None)
+    found = re.findall(rf"{symbol}-{interval}-(\d{{4}}-\d{{2}})\.zip", " ".join(keys))
+    return sorted(set(found))
 
 
-def _frame(rows: Iterable[list]) -> pd.DataFrame:
+def _frame(rows: Iterable[list], daily: bool = True) -> pd.DataFrame:
     frame = pd.DataFrame(list(rows), columns=COLUMNS)
     if frame.empty:
         return pd.DataFrame(columns=KEEP, index=pd.DatetimeIndex([], name="date"))
     stamps = frame["open_time"].astype("int64")
     unit = stamps.map(lambda v: "us" if v > 10**14 else "ms")
-    days = [
-        pd.Timestamp(int(v), unit=u).normalize()
-        for v, u in zip(stamps, unit, strict=True)
-    ]
+    days = [pd.Timestamp(int(v), unit=u) for v, u in zip(stamps, unit, strict=True)]
+    if daily:
+        days = [d.normalize() for d in days]
     out = frame[KEEP].astype(float)
     out.index = pd.DatetimeIndex(days, name="date")
     return out
 
 
-def month_candles(symbol: str, month: str) -> pd.DataFrame:
-    """Return one archived month of daily candles."""
-    url = f"{ARCHIVE}/data/spot/monthly/klines/{symbol}/1d/{symbol}-1d-{month}.zip"
+def month_candles(symbol: str, month: str, interval: str = "1d") -> pd.DataFrame:
+    """Return one archived month of candles."""
+    name = f"{symbol}-{interval}-{month}.zip"
+    url = f"{ARCHIVE}/data/spot/monthly/klines/{symbol}/{interval}/{name}"
     with zipfile.ZipFile(io.BytesIO(_get(url).content)) as archive:
         text = archive.read(archive.namelist()[0]).decode()
     rows = [line.split(",") for line in text.splitlines() if line and line[0].isdigit()]
-    return _frame(rows)
+    return _frame(rows, daily=interval == "1d")
 
 
-def recent_candles(symbol: str, start: date, today: date) -> pd.DataFrame:
-    """Return the finished days from ``start`` through yesterday from the REST API."""
+def recent_candles(
+    symbol: str, start: date, today: date, interval: str = "1d"
+) -> pd.DataFrame:
+    """Return the bars from ``start`` that began before ``today`` (REST API)."""
     rows: list[list] = []
     since = int(
         datetime(start.year, start.month, start.day, tzinfo=timezone.utc).timestamp()
@@ -110,26 +111,26 @@ def recent_candles(symbol: str, start: date, today: date) -> pd.DataFrame:
     )
     while True:
         batch = _get(
-            REST, symbol=symbol, interval="1d", startTime=since, limit=1000
+            REST, symbol=symbol, interval=interval, startTime=since, limit=1000
         ).json()
         rows += batch
         if len(batch) < 1000:
             break
         since = int(batch[-1][0]) + 1
-    frame = _frame(rows)
+    frame = _frame(rows, daily=interval == "1d")
     return frame[frame.index < pd.Timestamp(today)]
 
 
 def history(
-    symbol: str, today: date | None = None, refresh: bool = True
+    symbol: str, today: date | None = None, refresh: bool = True, interval: str = "1d"
 ) -> pd.DataFrame:
-    """Return ``symbol``'s daily candles, fetching what the cache lacks.
+    """Return ``symbol``'s candles, fetching what the cache lacks.
 
     Archived months are fetched once; days after the last archived month come
     from the REST API and are replaced when their month is archived.
     """
     today = today or datetime.now(timezone.utc).date()
-    folder = cache_dir()
+    folder = cache_dir(interval)
     folder.mkdir(parents=True, exist_ok=True)
     data_file, meta_file = folder / f"{symbol}.csv", folder / f"{symbol}.json"
     meta = json.loads(meta_file.read_text()) if meta_file.exists() else {}
@@ -138,8 +139,10 @@ def history(
     if not refresh:
         return cached
     have = set(meta.get("archived", []))
-    months = archived_months(symbol)
-    parts = [cached] + [month_candles(symbol, m) for m in months if m not in have]
+    months = archived_months(symbol, interval)
+    parts = [cached] + [
+        month_candles(symbol, m, interval) for m in months if m not in have
+    ]
     have |= set(months)
     last_month = max(have) if have else None
     recent = meta.get("recent_until")
@@ -148,7 +151,7 @@ def history(
     ):
         first = (pd.Timestamp(last_month + "-01") + pd.offsets.MonthBegin(1)).date()
         try:
-            parts.append(recent_candles(symbol, first, today))
+            parts.append(recent_candles(symbol, first, today, interval))
             meta["recent_until"] = (today - timedelta(days=1)).isoformat()
         except requests.HTTPError:  # delisted: the archive is all there is
             meta["recent_until"] = None
@@ -255,13 +258,16 @@ def funding(symbol: str, today: date | None = None) -> pd.Series:
 
 
 def download(
-    symbols: list[str], today: date | None = None, workers: int = 12
+    symbols: list[str],
+    today: date | None = None,
+    workers: int = 12,
+    interval: str = "1d",
 ) -> dict[str, pd.DataFrame]:
     """Fetch many symbols in parallel; symbols that fail are left out."""
 
     def one(symbol):
         try:
-            return symbol, history(symbol, today)
+            return symbol, history(symbol, today, interval=interval)
         except (requests.RequestException, zipfile.BadZipFile, ValueError):
             return symbol, None
 
