@@ -449,6 +449,18 @@ Literatürden yararlanılanlar:
 - Çok sayıda varyant denenip en iyisi seçildiğinde sonuç şişer; az deneme ve komşu ayarlarda kararlılık aranmalıdır ([Deflated Sharpe Ratio](https://www.davidhbailey.com/dhbpapers/deflated-sharpe.pdf)).
 - Dil modelleri eğitim dönemlerindeki fiyatları ezberleyebilir; yapay zeka stratejilerinin çoğu gerçek test dışı veride al-tutu geçemiyor ([Look-ahead bias in LLM forecasts](https://arxiv.org/pdf/2512.23847)). Kör testteki hisse adı, tarih ve fiyat seviyesi gizleme bu yüzdendir.
 
+## Kripto sanal hesap (7/24)
+
+**AI Strateji → 6 · Kripto sanal hesap** (`marketalyzer/crypto/`, `marketalyzer-crypto`, `GET /api/crypto`, `POST /api/crypto/step`): kripto araştırmasında öne çıkan yapay zekasız kural USD bazlı, kesirli miktarlı ayrı bir sanal hesapta sürekli çalışır. Her çeyrek başında 15 büyük coin son 90 günlük getiriye göre sıralanır, en güçlü 5'i seçilir (bir yıldan kısa geçmişi olan coin seçilmez). Seçilen coinde supertrend (çarpan 2, ATR 10) yukarı dönünce ve BTC 50 günlük ortalamasının üstündeyken özsermayenin 1/5'iyle alınır; supertrend aşağı dönünce ya da coin seçimden düşünce satılır. Kararlar UTC'ye göre kapanmış günlük barlarla verilir, işlem en son saatlik kapanıştan komisyon %0,1 ve kayma %0,1 ile yapılır. 2022 → 2026-10 testinde 100 000 $ bu kuralla 388 600 $ olurken eşit ağırlıklı al-tut 90 800 $, BTC 182 500 $ oldu.
+
+```bash
+marketalyzer-crypto init --cash 100000   # hesabı açar (var olanın üzerine yazmaz)
+marketalyzer-crypto step                 # kapanmış yeni günleri işler; aynı saatte tekrar çalışırsa bir şey yapmaz
+marketalyzer-crypto status
+```
+
+`step` kaçırılan günleri sırayla işler (en fazla 14 gün). Hesap `~/.local/share/marketalyzer/crypto/paper.sqlite` dosyasındadır. VPS'te `marketalyzer-crypto.timer` her saatin 10. dakikasında (UTC, 7/24) bir adım çalıştırır.
+
 ## Web uygulaması ve Cloudflare tüneli
 
 Masaüstünde pencere çerçeveli, kenar çubuklu bir uygulama; telefonda alt sekme çubuğu ve alttan açılan sayfalarla yerel uygulama hissi veren bir arayüz. Kenar çubuğundaki **Piyasa / Lab** anahtarı iki çalışma alanı arasında geçiş yapar:
