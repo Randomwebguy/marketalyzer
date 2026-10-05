@@ -49,7 +49,7 @@ class Plan:
     def short(self) -> str:
         """Return a very short name for the account switcher."""
         if self.signal == "donchian":
-            return "Donchian"
+            return f"Donchian %{self.target_vol * 100:g}"
         return f"Dilimli en güçlü {self.top}" if self.top else "Supertrend"
 
     def label(self) -> str:

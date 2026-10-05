@@ -104,6 +104,7 @@ def test_ranked_tranches_hold_only_the_strongest_and_split_the_weight(monkeypatc
     three = live.targets(frames, members, live.Plan(top=1, tranches=3, target_vol=5.0))
     assert len(one) == 1 and sum(one.values()) == pytest.approx(1.0)  # capped at 1x
     assert 1 <= len(three) <= 3 and sum(three.values()) == pytest.approx(1.0)
+    assert live.Plan(signal="donchian", target_vol=0.4).short() == "Donchian %40"
     assert live.Plan(top=5, tranches=3, target_vol=0.4).label() == (
         "En güçlü 5 · 3 dilim · oynaklık %40"
     )
